@@ -1509,24 +1509,25 @@ class RPGGame:
         win.focus_force()
 
         # Compute costs based on external pricing data
-        text_rates  = MODEL_COSTS.get(MODEL, {})
+        text_rates = MODEL_COSTS.get(MODEL, {})
         audio_rates = MODEL_COSTS.get(AUDIO_MODEL, {})
         image_rates = MODEL_COSTS.get(IMAGE_MODEL, {})
 
         cost_text_prompt = (
-            self.total_prompt_tokens * text_rates.get("input_cost_per_token", 0)
+            self.total_prompt_tokens
+            * text_rates.get("text_input_cost_per_token", 0)
         )
         cost_text_completion = (
             self.total_completion_tokens
-            * text_rates.get("output_cost_per_token", 0)
+            * text_rates.get("audio_output_cost_per_token", 0)
         )
         cost_audio_prompt = (
             self.total_audio_prompt_tokens
-            * audio_rates.get("input_cost_per_token", 0)
+            * audio_rates.get("text_input_cost_per_token", 0)
         )
         cost_audio_output = (
             self.total_audio_output_tokens
-            * audio_rates.get("output_cost_per_token", 0)
+            * audio_rates.get("audio_output_cost_per_token", 0)
         )
         cost_images = (
             self.total_images * image_rates.get("output_cost_per_image", 0)
