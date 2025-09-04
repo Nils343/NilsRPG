@@ -142,6 +142,28 @@ if api_key:
 else:
     client = None
 
+# Track which key the current client was built from so we can lazily
+# re-create it if the environment changes at runtime.
+_client_key = api_key
+
+
+def _ensure_client() -> genai.Client | None:
+    """Return a Gemini client for the current environment key.
+
+    This lazily (re)creates the global ``client`` if the key has been set or
+    changed since import time.
+    """
+    global client, _client_key
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        client = None
+        _client_key = None
+        return None
+    if client is None or key != _client_key:
+        client = genai.Client(api_key=key)
+        _client_key = key
+    return client
+
 # --- Main RPG application ---
 class RPGGame:
     """Tkinter-based RPG application powered by Google's Gemini models."""
@@ -538,16 +560,13 @@ class RPGGame:
 
     def _start_game(self):
         """Begin a new game session after validating the API key."""
-        # Ensure a Developer API key is set before starting
-        if not os.environ.get("GEMINI_API_KEY", "").strip():
-            messagebox.showwarning(
-                "Missing API Key",
-                "No Developer API key found.\n"
-                "Please go to API and add your Gemini Developer API key."
-            )
-            # Return to menu so the user can configure their key
+        # Ensure a Developer API key and usable client are available before
+        # starting the game. If validation fails, return to the menu so the
+        # user can configure their key.
+        if not self._validate_api_key():
             self._open_menu()
             return
+
 
         # Key present—game is officially starting.
         # Immediately show the default placeholder scene (overwriting who.png).
@@ -588,234 +607,242 @@ class RPGGame:
         """Send the player's choice to Gemini and stream the response."""
         def thread_target():
             """Worker thread that performs the streaming API call."""
-            # Collect the streamed situation text for TTS.
-            self._current_situation_streamed = ""
-
-            # advance our local turn counter (initial remains turn 1)
-            if not initial:
-                self.turn += 1
-
-            # Build prompt
-            if not initial:
-                self.root.after(0, self._append_choice_and_blank)                
-
-            start_api = time.time()
-            prompt = world_text
-            if not initial:
-                # Build full history.
-                history = list(zip(
-                    self.past_days,
-                    self.past_times,
-                    self.past_situations,
-                    self.past_options,
-                ))
-                if history[:-1]:
-                    prompt += "\n## **Player story:**"
-                    for d, t, s, o in history[:-1]:
-                        prompt += (
-                            f"\n[Day {d}, Time {t}]: Situation: {s}"
-                            f"\nChosen Option: {o}\n"
-                        )                     
-
-                prompt += f"\n## **Current Environment:** {json.dumps(self.environment)}\n"                                        
-                prompt += "\n## **Current player character state:**"
-                prompt += f"\n### Current Attributes: {json.dumps(self.attributes)}\n"
-                prompt += "### Current Perks & Skills: " + json.dumps([p.model_dump() for p in self.perks_skills]) + "\n"
-                prompt += "### Current Inventory: " + json.dumps([i.model_dump() for i in self.inventory]) + "\n"
-
-                prompt+="\n## **Image prompt**: The image prompt describes the unfolding scene from the point of view (POV) of the played character. If reasonable, he can see his hands or parts of his body.\n"
-                
-                last_day, last_time, last_situation, last_option = history[-1]
-                prompt += "\n## **Latest Situation/ Chosen Option:**"
-                prompt += (
-                    f"\n[Day {last_day}, Time {last_time}]: Situation: {last_situation}\n"
-                    f"**Chosen Option:** {last_option}\n"
-                ) 
-
-                prompt+="\n## **Your Task**:"
-                prompt+="\nYou are the Game Master. Process the latest Chosen Option to advance the story."
-                prompt+="\nDo not allow actions the character is incapable of. If he tries, punish him."
-                prompt+="\nSoundscape: do not list sounds, but summarize all of them with one or two words (maximum)."
-                prompt+="\nAddress the player in the first person only.\n"
-
-            else:
-                prompt += (
-                    "\n## **Game Start:**\n"
-                    f"**Player's self-description:** '{self.identity}'\n"
-                    "**Initial time context:** It is day 1 of this adventure. Choose a time (HH:MM)\n"
-                    "**First situation:** Place the character in a creative and interesting situation.\n"
-                    "**Environment of the character**: Describe the surroundings.\n"
-                    "**Initial inventory:** Equip the character with plausible starting items. Take into account essential supplies (for example, food, water, tools or ammunition), a reasonable amount of currency and clothing appropriate for the current temperature and climate conditions.\n"
-                    "**Perks & skills:** List relevant abilities\n"
-                    "**Attributes & background:**\n"
-                    "* If the character does not know their own name, use \"unknown\"; otherwise create one.\n"
-                    "* Provide the background in the form of a plausible fantasy class.\n"
-                    "**Present choices:** Offer 1-5 valid actions the player character could take next.\n"
-                    "**Image prompt:** Craft a detailed, high-quality prompt depicting the player character within this fantasy scenario. Put a special focus on the equipped gear.\n"
-                )
-
-                prompt+="\n## **Your Task**:"
-                prompt+="\nYou are the Game Master. Start this adventure."
-                prompt+="\nUse up to three words to describe the attributes and the environment."
-                prompt+="\nAddress the player in the first person only.\n"
-            
-#            prompt += "\n If the player wants to do something ridiculous or stupid, ask whether they are serious once. If already asked last turn and the player insists, follow their wish.\n"
-#            prompt += "Respond exclusively in German."
-
-            # Disable inputs
-            self.root.after(0, self._set_options_enabled, False)
-
-            # Maximum creativity on the very first turn
-            temp = 2.0 if initial else 0.6
-
-            print("\n================\n"+prompt)
-
-            # Streaming API call
-            stream = client.models.generate_content_stream(
-                model=MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=temp,
-                    response_mime_type="application/json",
-                    response_schema=GameResponse,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_budget=0,          # Turns off thinking
-                        include_thoughts=False      # Explicitly suppresses any thought fragments
+            try:
+                # Collect the streamed situation text for TTS.
+                self._current_situation_streamed = ""
+    
+                # advance our local turn counter (initial remains turn 1)
+                if not initial:
+                    self.turn += 1
+    
+                # Build prompt
+                if not initial:
+                    self.root.after(0, self._append_choice_and_blank)                
+    
+                start_api = time.time()
+                prompt = world_text
+                if not initial:
+                    # Build full history.
+                    history = list(zip(
+                        self.past_days,
+                        self.past_times,
+                        self.past_situations,
+                        self.past_options,
+                    ))
+                    if history[:-1]:
+                        prompt += "\n## **Player story:**"
+                        for d, t, s, o in history[:-1]:
+                            prompt += (
+                                f"\n[Day {d}, Time {t}]: Situation: {s}"
+                                f"\nChosen Option: {o}\n"
+                            )                     
+    
+                    prompt += f"\n## **Current Environment:** {json.dumps(self.environment)}\n"                                        
+                    prompt += "\n## **Current player character state:**"
+                    prompt += f"\n### Current Attributes: {json.dumps(self.attributes)}\n"
+                    prompt += "### Current Perks & Skills: " + json.dumps([p.model_dump() for p in self.perks_skills]) + "\n"
+                    prompt += "### Current Inventory: " + json.dumps([i.model_dump() for i in self.inventory]) + "\n"
+    
+                    prompt+="\n## **Image prompt**: The image prompt describes the unfolding scene from the point of view (POV) of the played character. If reasonable, he can see his hands or parts of his body.\n"
+                    
+                    last_day, last_time, last_situation, last_option = history[-1]
+                    prompt += "\n## **Latest Situation/ Chosen Option:**"
+                    prompt += (
+                        f"\n[Day {last_day}, Time {last_time}]: Situation: {last_situation}\n"
+                        f"**Chosen Option:** {last_option}\n"
+                    ) 
+    
+                    prompt+="\n## **Your Task**:"
+                    prompt+="\nYou are the Game Master. Process the latest Chosen Option to advance the story."
+                    prompt+="\nDo not allow actions the character is incapable of. If he tries, punish him."
+                    prompt+="\nSoundscape: do not list sounds, but summarize all of them with one or two words (maximum)."
+                    prompt+="\nAddress the player in the first person only.\n"
+    
+                else:
+                    prompt += (
+                        "\n## **Game Start:**\n"
+                        f"**Player's self-description:** '{self.identity}'\n"
+                        "**Initial time context:** It is day 1 of this adventure. Choose a time (HH:MM)\n"
+                        "**First situation:** Place the character in a creative and interesting situation.\n"
+                        "**Environment of the character**: Describe the surroundings.\n"
+                        "**Initial inventory:** Equip the character with plausible starting items. Take into account essential supplies (for example, food, water, tools or ammunition), a reasonable amount of currency and clothing appropriate for the current temperature and climate conditions.\n"
+                        "**Perks & skills:** List relevant abilities\n"
+                        "**Attributes & background:**\n"
+                        "* If the character does not know their own name, use \"unknown\"; otherwise create one.\n"
+                        "* Provide the background in the form of a plausible fantasy class.\n"
+                        "**Present choices:** Offer 1-5 valid actions the player character could take next.\n"
+                        "**Image prompt:** Craft a detailed, high-quality prompt depicting the player character within this fantasy scenario. Put a special focus on the equipped gear.\n"
                     )
-                ),
-            )
-
-            # Buffers
-            json_output = ""     # accumulate entire JSON
-            buf = ""             # working buffer for string extraction
-
-            # State flags
-            in_situation = False
-            escaping = False
-            done_situation = False
-
-            key = '"current_situation"'
-
-            # — Initialize for streaming token tracking —
-            last_usage = None
-
-            for chunk in stream:
-                # Capture the most recent cumulative token usage                
-                last_usage = chunk.usage_metadata                
-
-                text = chunk.text or ""
-                text = clean_unicode(chunk.text or "")
+    
+                    prompt+="\n## **Your Task**:"
+                    prompt+="\nYou are the Game Master. Start this adventure."
+                    prompt+="\nUse up to three words to describe the attributes and the environment."
+                    prompt+="\nAddress the player in the first person only.\n"
                 
-                # 1) Always accumulate the full JSON text
-                json_output += text
-
-                # 2) If we've already finished streaming the field, skip to next chunk
-                if done_situation:
-                    continue
-
-                # 3) Otherwise, append to buf and try to extract more of the string
-                buf += text
-
-                # 3a) If we haven't located the opening quote yet, look for the key + opening "
-                if not in_situation:
-                    idx = buf.find(key)
-                    if idx == -1:
-                        # keep only last len(key) chars to match a split key next time
-                        buf = buf[-len(key):]
+    #            prompt += "\n If the player wants to do something ridiculous or stupid, ask whether they are serious once. If already asked last turn and the player insists, follow their wish.\n"
+    #            prompt += "Respond exclusively in German."
+    
+                # Disable inputs
+                self.root.after(0, self._set_options_enabled, False)
+    
+                # Maximum creativity on the very first turn
+                temp = 2.0 if initial else 0.6
+    
+                print("\n================\n"+prompt)
+    
+                # Streaming API call
+                _ensure_client()
+                if client is None:
+                    raise RuntimeError("No API client available")
+                stream = client.models.generate_content_stream(
+                    model=MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=temp,
+                        response_mime_type="application/json",
+                        response_schema=GameResponse,
+                        thinking_config=types.ThinkingConfig(
+                            thinking_budget=0,          # Turns off thinking
+                            include_thoughts=False      # Explicitly suppresses any thought fragments
+                        )
+                    ),
+                )
+    
+                # Buffers
+                json_output = ""     # accumulate entire JSON
+                buf = ""             # working buffer for string extraction
+    
+                # State flags
+                in_situation = False
+                escaping = False
+                done_situation = False
+    
+                key = '"current_situation"'
+    
+                # — Initialize for streaming token tracking —
+                last_usage = None
+    
+                for chunk in stream:
+                    # Capture the most recent cumulative token usage                
+                    last_usage = chunk.usage_metadata                
+    
+                    text = chunk.text or ""
+                    text = clean_unicode(chunk.text or "")
+                    
+                    # 1) Always accumulate the full JSON text
+                    json_output += text
+    
+                    # 2) If we've already finished streaming the field, skip to next chunk
+                    if done_situation:
                         continue
-
-                    # drop everything through the key
-                    buf = buf[idx + len(key):]
-                    # find the colon+quote (allowing whitespace)
-                    m = re.search(r'\s*:\s*"', buf)
-                    if not m:
-                        continue
-
-                    # drop through the opening quote
-                    buf = buf[m.end():]
-                    in_situation = True
-
-                # 3b) We're inside the string: scan char by char
-                out_chars = []
-                i = 0
-                while i < len(buf):
-                    c = buf[i]
-                    if escaping:
-                        # previous '\' means this char is literal
-                        out_chars.append(c)
-                        escaping = False
-                    elif c == '\\':
-                        # start escape; keep the backslash for later JSON decoding
-                        out_chars.append(c)
-                        escaping = True
-                    elif c == '"':
-                        # un-escaped quote → end of string value
-                        raw_value = "".join(out_chars)
-                        # decode JSON escapes (e.g. \n, \uXXXX)
-                        try:
-                            decoded = json.loads(f'"{raw_value}"')
-                        except json.JSONDecodeError:
-                            decoded = raw_value
-                        # stream final fragment
-                        self.root.after(0, lambda txt=decoded: self._stream_situation(txt))
-                        # Speak the full situation immediately (in a separate thread)
-                        full_text = (self._current_situation_streamed or "") + decoded
-                        if SOUND_ENABLED:
-                            threading.Thread(
-                                target=self._speak_situation,
-                                args=(full_text,),
-                                daemon=True
-                            ).start()
-                        # remove through the closing quote
-                        buf = buf[i+1:]
-                        done_situation = True
-                        break
-                    else:
-                        out_chars.append(c)
-                    i += 1
-
-                # 3c) If we didn't reach the closing quote yet, flush what we have
-                if not done_situation:
-                    partial = "".join(out_chars)
-                    if partial:
-                        self.root.after(0, lambda txt=partial: self._stream_situation(txt))
-                    # clear buf so we don't reprocess these chars
-                    buf = ""
-
-            # 4) After the loop completes, parse the full JSON
-            gr = GameResponse.model_validate_json(json_output)
-            data = gr.model_dump()           # all fields as a dictionary
-            cleaned = clean_unicode(data)           # recursively filter all strings
-            gr = GameResponse.model_validate(cleaned)  # convert back into GameResponse
-        
-            print("\n=========================\n")
-            print(gr)
-
-            # — Update prompt & completion token metrics from streaming —
-            if last_usage is not None:
-                self.last_prompt_tokens = last_usage.prompt_token_count
-                self.total_prompt_tokens += self.last_prompt_tokens
-                self.last_completion_tokens = last_usage.candidates_token_count
-                self.total_completion_tokens += self.last_completion_tokens
-
-            self.last_api_duration = time.time() - start_api
-            #print("DURATION: "+str(self.last_api_duration))
-
-            # First, hide the text‐API “Thinking…” progress bar
-            self.root.after(0, self._finish_api)
-
-            # Store this turn’s image prompt before any UI callback
-            self.previous_image_prompt = gr.image_prompt
-            # Then schedule image generation if enabled.
-            if IMAGE_GENERATION_ENABLED:
-                prompt = self.previous_image_prompt
-                self.root.after(0, lambda p=prompt: self._start_image_generation(p))
-            # otherwise: do nothing, leave the last‐shown image in place
-
-            # Finally, update the UI state and re‐enable inputs
-            self.root.after(0, lambda: self._update_remaining_state(gr))
-            self.root.after(0, self._set_options_enabled, True)
-
+    
+                    # 3) Otherwise, append to buf and try to extract more of the string
+                    buf += text
+    
+                    # 3a) If we haven't located the opening quote yet, look for the key + opening "
+                    if not in_situation:
+                        idx = buf.find(key)
+                        if idx == -1:
+                            # keep only last len(key) chars to match a split key next time
+                            buf = buf[-len(key):]
+                            continue
+    
+                        # drop everything through the key
+                        buf = buf[idx + len(key):]
+                        # find the colon+quote (allowing whitespace)
+                        m = re.search(r'\s*:\s*"', buf)
+                        if not m:
+                            continue
+    
+                        # drop through the opening quote
+                        buf = buf[m.end():]
+                        in_situation = True
+    
+                    # 3b) We're inside the string: scan char by char
+                    out_chars = []
+                    i = 0
+                    while i < len(buf):
+                        c = buf[i]
+                        if escaping:
+                            # previous '\' means this char is literal
+                            out_chars.append(c)
+                            escaping = False
+                        elif c == '\\':
+                            # start escape; keep the backslash for later JSON decoding
+                            out_chars.append(c)
+                            escaping = True
+                        elif c == '"':
+                            # un-escaped quote → end of string value
+                            raw_value = "".join(out_chars)
+                            # decode JSON escapes (e.g. \n, \uXXXX)
+                            try:
+                                decoded = json.loads(f'"{raw_value}"')
+                            except json.JSONDecodeError:
+                                decoded = raw_value
+                            # stream final fragment
+                            self.root.after(0, lambda txt=decoded: self._stream_situation(txt))
+                            # Speak the full situation immediately (in a separate thread)
+                            full_text = (self._current_situation_streamed or "") + decoded
+                            if SOUND_ENABLED:
+                                threading.Thread(
+                                    target=self._speak_situation,
+                                    args=(full_text,),
+                                    daemon=True
+                                ).start()
+                            # remove through the closing quote
+                            buf = buf[i+1:]
+                            done_situation = True
+                            break
+                        else:
+                            out_chars.append(c)
+                        i += 1
+    
+                    # 3c) If we didn't reach the closing quote yet, flush what we have
+                    if not done_situation:
+                        partial = "".join(out_chars)
+                        if partial:
+                            self.root.after(0, lambda txt=partial: self._stream_situation(txt))
+                        # clear buf so we don't reprocess these chars
+                        buf = ""
+    
+                # 4) After the loop completes, parse the full JSON
+                gr = GameResponse.model_validate_json(json_output)
+                data = gr.model_dump()           # all fields as a dictionary
+                cleaned = clean_unicode(data)           # recursively filter all strings
+                gr = GameResponse.model_validate(cleaned)  # convert back into GameResponse
+            
+                print("\n=========================\n")
+                print(gr)
+    
+                # — Update prompt & completion token metrics from streaming —
+                if last_usage is not None:
+                    self.last_prompt_tokens = last_usage.prompt_token_count
+                    self.total_prompt_tokens += self.last_prompt_tokens
+                    self.last_completion_tokens = last_usage.candidates_token_count
+                    self.total_completion_tokens += self.last_completion_tokens
+    
+                self.last_api_duration = time.time() - start_api
+                #print("DURATION: "+str(self.last_api_duration))
+    
+                # First, hide the text‐API “Thinking…” progress bar
+                self.root.after(0, self._finish_api)
+    
+                # Store this turn’s image prompt before any UI callback
+                self.previous_image_prompt = gr.image_prompt
+                # Then schedule image generation if enabled.
+                if IMAGE_GENERATION_ENABLED:
+                    prompt = self.previous_image_prompt
+                    self.root.after(0, lambda p=prompt: self._start_image_generation(p))
+                # otherwise: do nothing, leave the last‐shown image in place
+    
+                # Finally, update the UI state and re‐enable inputs
+                self.root.after(0, lambda: self._update_remaining_state(gr))
+                self.root.after(0, self._set_options_enabled, True)
+    
+            except Exception as e:
+                self.root.after(0, self._finish_api)
+                self.root.after(0, self._set_options_enabled, True)
+                self.root.after(0, lambda: messagebox.showerror("API Error", str(e)))
         # Show thinking progress bar
         self.progress_label.config(text="Thinking…")
         self.progress.config(style="Thinking.Horizontal.TProgressbar")
@@ -1928,10 +1955,10 @@ class RPGGame:
             try:
                 test_client = genai.Client(api_key=key)
                 test_client.models.list(config={'page_size': 1})
-            except errors.APIError as e:
+            except Exception as e:
                 messagebox.showerror(
                     "Invalid API Key",
-                    f"The provided API key is invalid or unauthorized:\n{e.message}"
+                    f"The provided API key is invalid or unauthorized:\n{e}"
                 )
                 return
 
@@ -1939,8 +1966,9 @@ class RPGGame:
             #    and rebind the global client
             set_user_env_var("GEMINI_API_KEY", key)
             os.environ["GEMINI_API_KEY"] = key
-            global client
+            global client, _client_key
             client = test_client
+            _client_key = key
 
             global IMAGE_GENERATION_ENABLED
             IMAGE_GENERATION_ENABLED = img_var.get()
@@ -1982,15 +2010,17 @@ class RPGGame:
             )
             return False
         try:
+            _ensure_client()
+            if client is None:
+                raise RuntimeError("No API client available")
             client.models.list(config={'page_size': 1})
-        except errors.APIError as e:
+        except Exception as e:
             messagebox.showerror(
                 "Invalid API Key",
-                f"The provided API key is invalid or unauthorized:\n{e.message}"
+                f"The provided API key is invalid or unauthorized:\n{e}"
             )
             return False
         return True
-
     def _handle_new_game(self):
         """Callback for New Game: immediately go to identity prompt."""
         self.menu_win.destroy()
