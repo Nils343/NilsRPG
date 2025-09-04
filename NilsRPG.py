@@ -1,29 +1,31 @@
+import glob
+import json
 import os
 import os.path
-import tempfile
-import sys
-import re
-import json
-import time
-import threading
-import tkinter as tk
 import pickle
+import re
+import sys
+import tempfile
+import threading
+import time
 import uuid
-import glob
-import winreg
-import ctypes
-import importlib.resources as pkg_resources
-import unicodedata
-from collections.abc import Mapping, Sequence
-from tkinter import ttk, messagebox, font as tkfont
-from PIL import Image, ImageTk
+import tkinter as tk
 from io import BytesIO
+from tkinter import ttk, messagebox, font as tkfont
+
+import importlib.resources as pkg_resources
+from PIL import Image, ImageTk
 from google import genai
 from google.genai import types, errors
-from pydantic import BaseModel
 from ttkbootstrap import Style
 import wave
-import winsound
+try:
+    import winsound
+except ImportError:  # pragma: no cover - non-Windows
+    winsound = None
+
+from models import Attributes, Environment, GameResponse, InventoryItem, PerkSkill
+from utils import clean_unicode, load_embedded_fonts, set_user_env_var
 
 IMAGE_GENERATION_ENABLED = False
 MODEL = "gemini-2.5-flash"  # text model
@@ -33,48 +35,8 @@ AUDIO_MODEL = "gemini-2.5-flash-preview-tts"
 #IMAGE_MODEL = "imagen-4.0-ultra-generate-001" # image model
 IMAGE_MODEL = "imagen-4.0-fast-generate-001" # image model
 
-# Helper to write a user‐level env var into HKCU\Environment
-def set_user_env_var(name: str, value: str):
-    # 1) Write to HKCU\Environment
-    reg_key = winreg.OpenKey(
-        winreg.HKEY_CURRENT_USER,
-        "Environment",
-        0,
-        winreg.KEY_SET_VALUE
-    )
-    winreg.SetValueEx(reg_key, name, 0, winreg.REG_EXPAND_SZ, value)
-    winreg.CloseKey(reg_key)
-
-    # 2) Broadcast settings change so new processes pick it up
-    HWND_BROADCAST      = 0xFFFF
-    WM_SETTINGCHANGE    = 0x001A
-    SMTO_ABORTIFHUNG    = 0x0002
-    ctypes.windll.user32.SendMessageTimeoutW(
-        HWND_BROADCAST,
-        WM_SETTINGCHANGE,
-        0,
-        "Environment",
-        SMTO_ABORTIFHUNG,
-        5000,
-        None
-    )
-
-def _clean(obj):
-    """Recursively remove Unicode control characters from mappings and sequences."""
-    # 1. Strings: remove all Unicode control characters (category C*) but keep umlauts
-    if isinstance(obj, str):
-        return ''.join(ch for ch in obj if unicodedata.category(ch)[0] != 'C')
-    # 2. Dicts: apply cleaning recursively to all values
-    if isinstance(obj, Mapping):
-        return {k: _clean(v) for k, v in obj.items()}
-    # 3. Lists/Tuples: clean every element
-    if isinstance(obj, Sequence) and not isinstance(obj, str):
-        return type(obj)(_clean(v) for v in obj)
-    # 4. Other types (numbers, None, etc.): leave unchanged
-    return obj
-
 # --- Attribute explanations ---
-ATTRIBUTE_EXPLANATIONS = { 
+ATTRIBUTE_EXPLANATIONS = {
     "Name": "The character's chosen or given name; used for narrative reference and identification.",
     "Background": "A concise summary of upbringing, training, or profession that anchors starting skills and worldview.",
     "Age": "Number of lived or apparent years; shapes physical capability, maturity, and social perception.",
@@ -92,73 +54,8 @@ ATTRIBUTE_EXPLANATIONS = {
     "Soundscape": "Ambient sounds from nature or activity; shapes awareness, mood, and stealth dynamics."
 }
 
-# ——— Register embedded .ttf/.otf fonts at runtime ———
-def load_embedded_fonts():
-    """Load fonts embedded in our `assets` package via importlib.resources."""
-    if sys.platform.startswith("win"):
-        import ctypes
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        FR_PRIVATE = 0x10
-
-        # assets/{Cormorant_Garamond,Cardo} each contains .ttf/.otf
-        for family_dir in ("Cormorant_Garamond", "Cardo"):
-            pkg = f"assets.{family_dir}"
-            for font_name in pkg_resources.contents(pkg):
-                if font_name.lower().endswith((".ttf", ".otf")):
-                    data = pkg_resources.read_binary(pkg, font_name)
-                    # write to temp file so GDI can load it
-                    tmpdir = tempfile.gettempdir()
-                    path = os.path.join(tmpdir, font_name)
-                    with open(path, "wb") as f:
-                        f.write(data)
-                    ctypes.windll.gdi32.AddFontResourceExW(path, FR_PRIVATE, 0)
-
+# Load embedded fonts once on startup
 load_embedded_fonts()
-
-# --- Pydantic models for API response ---
-class IdentitiesResponse(BaseModel):
-    identities: list[str]
-
-class InventoryItem(BaseModel):
-    name: str
-    description: str
-    weight: float
-    equipped: bool
-
-class PerkSkill(BaseModel):
-    name: str
-    degree: str
-    description: str
-
-class Attributes(BaseModel):
-    Name: str
-    Background: str
-    Age: str
-    Health: str
-    Sanity: str
-    Hunger: str
-    Thirst: str
-    Stamina: str
-
-class Environment(BaseModel):
-    Location: str
-    Daytime: str
-    Light: str
-    Temperature: str
-    Humidity: str
-    Wind: str
-    Soundscape: str
-
-class GameResponse(BaseModel):
-    day: int
-    time: str
-    current_situation: str
-    environment: Environment    
-    inventory: list[InventoryItem]
-    perks_skills: list[PerkSkill]
-    attributes: Attributes
-    options: list[str]
-    image_prompt: str
 
 # ——— Parse STYLE & DIFFICULTY sections from world.txt ———
 def _parse_world():
@@ -756,7 +653,7 @@ class RPGGame:
                 last_usage = chunk.usage_metadata                
 
                 text = chunk.text or ""
-                text = _clean(chunk.text or "")
+                text = clean_unicode(chunk.text or "")
                 
                 # 1) Always accumulate the full JSON text
                 json_output += text
@@ -836,7 +733,7 @@ class RPGGame:
             # 4) After the loop completes, parse the full JSON
             gr = GameResponse.model_validate_json(json_output)
             data = gr.model_dump()           # all fields as a dictionary
-            cleaned = _clean(data)           # recursively filter all strings
+            cleaned = clean_unicode(data)           # recursively filter all strings
             gr = GameResponse.model_validate(cleaned)  # convert back into GameResponse
         
             print("\n=========================\n")
@@ -1072,8 +969,11 @@ class RPGGame:
                 wf.setframerate(24000)
                 wf.writeframes(pcm)
             # Stop any previous playback, then play asynchronously
-            winsound.PlaySound(None, winsound.SND_PURGE)
-            winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            if winsound:
+                winsound.PlaySound(None, winsound.SND_PURGE)
+                winsound.PlaySound(
+                    wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC
+                )
         except Exception as e:
             # Non-fatal: just log it
             print("TTS error:", e)       
@@ -2063,3 +1963,4 @@ if __name__ == "__main__":
     game.run()
 
 # pyinstaller --clean --noconfirm --onefile --windowed --add-data "assets;assets" NilsRPG.py
+
