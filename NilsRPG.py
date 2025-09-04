@@ -1042,7 +1042,7 @@ class RPGGame:
                 "Read VERBATIM—no additions.\n\n"
                 "[SCRIPT START]\n" + text + "\n[SCRIPT END]"
             )
-            resp = client.models.generate_content(
+            stream = client.models.generate_content_stream(
                 model=AUDIO_MODEL,
                 contents=narration,
                 config=types.GenerateContentConfig(
@@ -1056,30 +1056,36 @@ class RPGGame:
                     ),
                 ),
             )
-            # Track narration token usage for cost calculations
-            if getattr(resp, "usage_metadata", None):
-                self.total_audio_prompt_tokens += (
-                    resp.usage_metadata.prompt_token_count or 0
-                )
-                self.total_audio_output_tokens += (
-                    resp.usage_metadata.candidates_token_count or 0
-                )
-            # PCM 16-bit @ 24 kHz → wrap into a WAV file and play
-            pcm = resp.candidates[0].content.parts[0].inline_data.data
             wav_path = os.path.join(
                 tempfile.gettempdir(), f"nils_rpg_tts_{int(time.time())}.wav"
             )
-            with wave.open(wav_path, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)       # 16-bit
-                wf.setframerate(24000)
-                wf.writeframes(pcm)
-            # Stop any previous playback, then play asynchronously
-            if winsound:
-                winsound.PlaySound(None, winsound.SND_PURGE)
-                winsound.PlaySound(
-                    wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC
-                )
+            wf = wave.open(wav_path, "wb")
+            wf.setnchannels(1)
+            wf.setsampwidth(2)       # 16-bit
+            wf.setframerate(24000)
+            audio_chunks = []
+            started = False
+            for chunk in stream:
+                if getattr(chunk, "usage_metadata", None):
+                    self.total_audio_prompt_tokens += (
+                        chunk.usage_metadata.prompt_token_count or 0
+                    )
+                    self.total_audio_output_tokens += (
+                        chunk.usage_metadata.candidates_token_count or 0
+                    )
+                part = chunk.candidates[0].content.parts[0]
+                if getattr(part, "inline_data", None):
+                    data = part.inline_data.data
+                    audio_chunks.append(data)
+                    wf.writeframes(data)
+                    if not started and winsound:
+                        wf._file.flush()
+                        winsound.PlaySound(None, winsound.SND_PURGE)
+                        winsound.PlaySound(
+                            wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC
+                        )
+                        started = True
+            wf.close()
         except Exception as e:
             # Non-fatal: just log it
             print("TTS error:", e)       
