@@ -74,6 +74,27 @@ def clean_unicode(obj):
     return obj
 
 
+def get_response_tokens(usage) -> int:
+    """Return generated token count from a usage metadata object.
+
+    The Google GenAI SDK has used different attribute names for this value
+    across API surfaces.  The modern ``responses`` API exposes
+    ``response_token_count`` while the older ``models.generate_content`` API
+    provided ``candidates_token_count``.  This helper checks for both so callers
+    remain compatible regardless of which object type they receive.  When the
+    attribute is missing or ``usage`` is ``None`` the function returns ``0``.
+    """
+
+    if usage is None:  # pragma: no cover - defensive
+        return 0
+
+    return (
+        getattr(usage, "response_token_count", None)
+        or getattr(usage, "candidates_token_count", 0)
+        or 0
+    )
+
+
 def load_embedded_fonts() -> None:
     """Register fonts embedded in the assets package.
 
