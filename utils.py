@@ -43,6 +43,26 @@ def set_user_env_var(name: str, value: str) -> None:
     )
 
 
+def get_user_env_var(name: str) -> str | None:
+    r"""Retrieve a user-level environment variable on Windows.
+
+    This helper reads the ``HKCU\Environment`` registry key so that values
+    configured globally are discovered even when the current process environment
+    does not include them (for example when running inside a virtual
+    environment).  On non-Windows platforms it simply falls back to
+    ``os.environ``.
+    """
+    if not sys.platform.startswith("win") or winreg is None:
+        return os.environ.get(name)
+    try:
+        reg_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment")
+        value, _ = winreg.QueryValueEx(reg_key, name)
+        winreg.CloseKey(reg_key)
+        return value
+    except FileNotFoundError:
+        return os.environ.get(name)
+
+
 def clean_unicode(obj):
     """Recursively strip Unicode control characters from nested structures."""
     if isinstance(obj, str):
