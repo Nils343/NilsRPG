@@ -814,8 +814,17 @@ class RPGGame:
                                 decoded = json.loads(f'"{raw_value}"')
                             except json.JSONDecodeError:
                                 decoded = raw_value
-                            # stream final fragment
-                            self.root.after(0, lambda txt=decoded: self._stream_situation(txt))
+                            if DEBUG_TTS and self._debug_t_text_done is None and not self._debug_logged_once:
+                                self._debug_t_text_done = time.time()
+                            def _finalize_situation(txt=decoded):
+                                self._stream_situation(txt)
+                                if SOUND_ENABLED:
+                                    threading.Thread(
+                                        target=self._speak_situation,
+                                        args=(self._current_situation_streamed,),
+                                        daemon=True,
+                                    ).start()
+                            self.root.after(0, _finalize_situation)
                             # remove through the closing quote
                             buf = buf[i+1:]
                             done_situation = True
@@ -832,18 +841,7 @@ class RPGGame:
                         # clear buf so we don't reprocess these chars
                         buf = ""
     
-                # 4) After the loop completes, parse the full JSON and speak the narration
-                if DEBUG_TTS and self._debug_t_text_done is None and not self._debug_logged_once:
-                    self._debug_t_text_done = time.time()
-                if SOUND_ENABLED:
-                    self.root.after(
-                        0,
-                        lambda: threading.Thread(
-                            target=self._speak_situation,
-                            args=(self._current_situation_streamed,),
-                            daemon=True,
-                        ).start(),
-                    )
+                # 4) After the loop completes, parse the full JSON
                 gr = GameResponse.model_validate_json(json_output)
                 data = gr.model_dump()           # all fields as a dictionary
                 cleaned = clean_unicode(data)           # recursively filter all strings
