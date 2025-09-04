@@ -131,30 +131,36 @@ _STYLES, _DIFFICULTIES = _parse_world()
 world_text = ""
 
 # --- Gemini client setup ---
-# Prefer an existing environment variable but fall back to the user's global
-# Windows environment settings (useful when running from a virtual
-# environment).
-api_key = os.environ.get("GEMINI_API_KEY") or get_user_env_var("GEMINI_API_KEY")
-if api_key:
-    # ensure downstream code can always rely on os.environ
-    os.environ["GEMINI_API_KEY"] = api_key
-    client = genai.Client(api_key=api_key)
-else:
-    client = None
+# Defer client creation; we'll (re)create it when starting the game.
+client = None
+_client_key = None
 
-# Track which key the current client was built from so we can lazily
-# re-create it if the environment changes at runtime.
-_client_key = api_key
+
+def _resolve_api_key() -> str:
+    """Return the best available Gemini API key.
+
+    This first checks ``os.environ`` then falls back to the user's global
+    environment via :func:`get_user_env_var`. If a key is found it is written
+    back into ``os.environ`` so downstream code can rely on it.
+    """
+    key = (
+        os.environ.get("GEMINI_API_KEY")
+        or get_user_env_var("GEMINI_API_KEY")
+        or ""
+    ).strip()
+    if key:
+        os.environ["GEMINI_API_KEY"] = key  # ensure downstream code sees it
+    return key
 
 
 def _ensure_client() -> genai.Client | None:
     """Return a Gemini client for the current environment key.
 
     This lazily (re)creates the global ``client`` if the key has been set or
-    changed since import time.
+    changed since the last call.
     """
     global client, _client_key
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    key = _resolve_api_key()
     if not key:
         client = None
         _client_key = None
@@ -560,13 +566,21 @@ class RPGGame:
 
     def _start_game(self):
         """Begin a new game session after validating the API key."""
-        # Ensure a Developer API key and usable client are available before
-        # starting the game. If validation fails, return to the menu so the
-        # user can configure their key.
-        if not self._validate_api_key():
+        # Resolve the API key, including the registry fallback. If no key is
+        # available, return to the main menu so the user can configure one.
+        key = _resolve_api_key()
+        if not key:
+            messagebox.showwarning(
+                "Missing API Key",
+                "No Developer API key found.\nPlease go to API and add your Gemini Developer API key."
+            )
             self._open_menu()
             return
 
+        # (Re)create the genai client now that we definitely have a key
+        global client, _client_key
+        client = genai.Client(api_key=key)
+        _client_key = key
 
         # Key present—game is officially starting.
         # Immediately show the default placeholder scene (overwriting who.png).
@@ -2001,12 +2015,12 @@ class RPGGame:
     # ——— New methods for API‑key validation on menu actions ———
     def _validate_api_key(self):
         """Check that GEMINI_API_KEY exists and authorizes requests."""
-        key = os.environ.get("GEMINI_API_KEY", "").strip()
+        key = _resolve_api_key()
         if not key:
             messagebox.showwarning(
                 "Missing API Key",
                 "No Developer API key found.\n"
-                "Please configure your Gemini Developer API key before proceeding."
+                "Please configure your Gemini Developer API key before proceeding.",
             )
             return False
         try:
