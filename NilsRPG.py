@@ -538,18 +538,13 @@ class RPGGame:
 
     def _start_game(self):
         """Begin a new game session after validating the API key."""
-        # Ensure a Developer API key is set before starting
-        if not os.environ.get("GEMINI_API_KEY", "").strip():
-            messagebox.showwarning(
-                "Missing API Key",
-                "No Developer API key found.\n"
-                "Please go to API and add your Gemini Developer API key."
-            )
+        # Ensure a Developer API key is set and valid before starting
+        if not self._validate_api_key():
             # Return to menu so the user can configure their key
             self._open_menu()
             return
 
-        # Key present—game is officially starting.
+        # Key present and valid—game is officially starting.
         # Immediately show the default placeholder scene (overwriting who.png).
         data = pkg_resources.read_binary("assets", "default.png")
         placeholder = Image.open(BytesIO(data))
@@ -586,6 +581,14 @@ class RPGGame:
 
     def _call_api(self, option_text: str, initial: bool=False):
         """Send the player's choice to Gemini and stream the response."""
+        if client is None:
+            messagebox.showerror(
+                "Missing API Key",
+                "No Developer API key found.\nPlease configure your Gemini Developer API key before proceeding.",
+            )
+            self._set_options_enabled(True)
+            return
+
         def thread_target():
             """Worker thread that performs the streaming API call."""
             # Collect the streamed situation text for TTS.
@@ -671,150 +674,168 @@ class RPGGame:
             print("\n================\n"+prompt)
 
             # Streaming API call
-            stream = client.models.generate_content_stream(
-                model=MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=temp,
-                    response_mime_type="application/json",
-                    response_schema=GameResponse,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_budget=0,          # Turns off thinking
-                        include_thoughts=False      # Explicitly suppresses any thought fragments
-                    )
-                ),
-            )
-
-            # Buffers
-            json_output = ""     # accumulate entire JSON
-            buf = ""             # working buffer for string extraction
-
-            # State flags
-            in_situation = False
-            escaping = False
-            done_situation = False
-
-            key = '"current_situation"'
-
-            # — Initialize for streaming token tracking —
-            last_usage = None
-
-            for chunk in stream:
-                # Capture the most recent cumulative token usage                
-                last_usage = chunk.usage_metadata                
-
-                text = chunk.text or ""
-                text = clean_unicode(chunk.text or "")
-                
-                # 1) Always accumulate the full JSON text
-                json_output += text
-
-                # 2) If we've already finished streaming the field, skip to next chunk
-                if done_situation:
-                    continue
-
-                # 3) Otherwise, append to buf and try to extract more of the string
-                buf += text
-
-                # 3a) If we haven't located the opening quote yet, look for the key + opening "
-                if not in_situation:
-                    idx = buf.find(key)
-                    if idx == -1:
-                        # keep only last len(key) chars to match a split key next time
-                        buf = buf[-len(key):]
+            try:
+                stream = client.models.generate_content_stream(
+                    model=MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=temp,
+                        response_mime_type="application/json",
+                        response_schema=GameResponse,
+                        thinking_config=types.ThinkingConfig(
+                            thinking_budget=0,          # Turns off thinking
+                            include_thoughts=False      # Explicitly suppresses any thought fragments
+                        )
+                    ),
+                )
+    
+                # Buffers
+                json_output = ""     # accumulate entire JSON
+                buf = ""             # working buffer for string extraction
+    
+                # State flags
+                in_situation = False
+                escaping = False
+                done_situation = False
+    
+                key = '"current_situation"'
+    
+                # — Initialize for streaming token tracking —
+                last_usage = None
+    
+                for chunk in stream:
+                    # Capture the most recent cumulative token usage                
+                    last_usage = chunk.usage_metadata                
+    
+                    text = chunk.text or ""
+                    text = clean_unicode(chunk.text or "")
+                    
+                    # 1) Always accumulate the full JSON text
+                    json_output += text
+    
+                    # 2) If we've already finished streaming the field, skip to next chunk
+                    if done_situation:
                         continue
-
-                    # drop everything through the key
-                    buf = buf[idx + len(key):]
-                    # find the colon+quote (allowing whitespace)
-                    m = re.search(r'\s*:\s*"', buf)
-                    if not m:
-                        continue
-
-                    # drop through the opening quote
-                    buf = buf[m.end():]
-                    in_situation = True
-
-                # 3b) We're inside the string: scan char by char
-                out_chars = []
-                i = 0
-                while i < len(buf):
-                    c = buf[i]
-                    if escaping:
-                        # previous '\' means this char is literal
-                        out_chars.append(c)
-                        escaping = False
-                    elif c == '\\':
-                        # start escape; keep the backslash for later JSON decoding
-                        out_chars.append(c)
-                        escaping = True
-                    elif c == '"':
-                        # un-escaped quote → end of string value
-                        raw_value = "".join(out_chars)
-                        # decode JSON escapes (e.g. \n, \uXXXX)
-                        try:
-                            decoded = json.loads(f'"{raw_value}"')
-                        except json.JSONDecodeError:
-                            decoded = raw_value
-                        # stream final fragment
-                        self.root.after(0, lambda txt=decoded: self._stream_situation(txt))
-                        # Speak the full situation immediately (in a separate thread)
-                        full_text = (self._current_situation_streamed or "") + decoded
-                        if SOUND_ENABLED:
-                            threading.Thread(
-                                target=self._speak_situation,
-                                args=(full_text,),
-                                daemon=True
-                            ).start()
-                        # remove through the closing quote
-                        buf = buf[i+1:]
-                        done_situation = True
-                        break
-                    else:
-                        out_chars.append(c)
-                    i += 1
-
-                # 3c) If we didn't reach the closing quote yet, flush what we have
-                if not done_situation:
-                    partial = "".join(out_chars)
-                    if partial:
-                        self.root.after(0, lambda txt=partial: self._stream_situation(txt))
-                    # clear buf so we don't reprocess these chars
-                    buf = ""
-
-            # 4) After the loop completes, parse the full JSON
-            gr = GameResponse.model_validate_json(json_output)
-            data = gr.model_dump()           # all fields as a dictionary
-            cleaned = clean_unicode(data)           # recursively filter all strings
-            gr = GameResponse.model_validate(cleaned)  # convert back into GameResponse
-        
-            print("\n=========================\n")
-            print(gr)
-
-            # — Update prompt & completion token metrics from streaming —
-            if last_usage is not None:
-                self.last_prompt_tokens = last_usage.prompt_token_count
-                self.total_prompt_tokens += self.last_prompt_tokens
-                self.last_completion_tokens = last_usage.candidates_token_count
-                self.total_completion_tokens += self.last_completion_tokens
-
-            self.last_api_duration = time.time() - start_api
-            #print("DURATION: "+str(self.last_api_duration))
-
-            # First, hide the text‐API “Thinking…” progress bar
-            self.root.after(0, self._finish_api)
-
-            # Store this turn’s image prompt before any UI callback
-            self.previous_image_prompt = gr.image_prompt
-            # Then schedule image generation if enabled.
-            if IMAGE_GENERATION_ENABLED:
-                prompt = self.previous_image_prompt
-                self.root.after(0, lambda p=prompt: self._start_image_generation(p))
-            # otherwise: do nothing, leave the last‐shown image in place
-
-            # Finally, update the UI state and re‐enable inputs
-            self.root.after(0, lambda: self._update_remaining_state(gr))
-            self.root.after(0, self._set_options_enabled, True)
+    
+                    # 3) Otherwise, append to buf and try to extract more of the string
+                    buf += text
+    
+                    # 3a) If we haven't located the opening quote yet, look for the key + opening "
+                    if not in_situation:
+                        idx = buf.find(key)
+                        if idx == -1:
+                            # keep only last len(key) chars to match a split key next time
+                            buf = buf[-len(key):]
+                            continue
+    
+                        # drop everything through the key
+                        buf = buf[idx + len(key):]
+                        # find the colon+quote (allowing whitespace)
+                        m = re.search(r'\s*:\s*"', buf)
+                        if not m:
+                            continue
+    
+                        # drop through the opening quote
+                        buf = buf[m.end():]
+                        in_situation = True
+    
+                    # 3b) We're inside the string: scan char by char
+                    out_chars = []
+                    i = 0
+                    while i < len(buf):
+                        c = buf[i]
+                        if escaping:
+                            # previous '\' means this char is literal
+                            out_chars.append(c)
+                            escaping = False
+                        elif c == '\\':
+                            # start escape; keep the backslash for later JSON decoding
+                            out_chars.append(c)
+                            escaping = True
+                        elif c == '"':
+                            # un-escaped quote → end of string value
+                            raw_value = "".join(out_chars)
+                            # decode JSON escapes (e.g. \n, \uXXXX)
+                            try:
+                                decoded = json.loads(f'"{raw_value}"')
+                            except json.JSONDecodeError:
+                                decoded = raw_value
+                            # stream final fragment
+                            self.root.after(0, lambda txt=decoded: self._stream_situation(txt))
+                            # Speak the full situation immediately (in a separate thread)
+                            full_text = (self._current_situation_streamed or "") + decoded
+                            if SOUND_ENABLED:
+                                threading.Thread(
+                                    target=self._speak_situation,
+                                    args=(full_text,),
+                                    daemon=True
+                                ).start()
+                            # remove through the closing quote
+                            buf = buf[i+1:]
+                            done_situation = True
+                            break
+                        else:
+                            out_chars.append(c)
+                        i += 1
+    
+                    # 3c) If we didn't reach the closing quote yet, flush what we have
+                    if not done_situation:
+                        partial = "".join(out_chars)
+                        if partial:
+                            self.root.after(0, lambda txt=partial: self._stream_situation(txt))
+                        # clear buf so we don't reprocess these chars
+                        buf = ""
+    
+                # 4) After the loop completes, parse the full JSON
+                gr = GameResponse.model_validate_json(json_output)
+                data = gr.model_dump()           # all fields as a dictionary
+                cleaned = clean_unicode(data)           # recursively filter all strings
+                gr = GameResponse.model_validate(cleaned)  # convert back into GameResponse
+            
+                print("\n=========================\n")
+                print(gr)
+    
+                # — Update prompt & completion token metrics from streaming —
+                if last_usage is not None:
+                    self.last_prompt_tokens = last_usage.prompt_token_count
+                    self.total_prompt_tokens += self.last_prompt_tokens
+                    self.last_completion_tokens = last_usage.candidates_token_count
+                    self.total_completion_tokens += self.last_completion_tokens
+    
+                self.last_api_duration = time.time() - start_api
+                #print("DURATION: "+str(self.last_api_duration))
+    
+                # First, hide the text‐API “Thinking…” progress bar
+                self.root.after(0, self._finish_api)
+    
+                # Store this turn’s image prompt before any UI callback
+                self.previous_image_prompt = gr.image_prompt
+                # Then schedule image generation if enabled.
+                if IMAGE_GENERATION_ENABLED:
+                    prompt = self.previous_image_prompt
+                    self.root.after(0, lambda p=prompt: self._start_image_generation(p))
+                # otherwise: do nothing, leave the last‐shown image in place
+    
+                # Finally, update the UI state and re‐enable inputs
+                self.root.after(0, lambda: self._update_remaining_state(gr))
+                self.root.after(0, self._set_options_enabled, True)
+                self.last_image_duration = time.time() - start
+            except errors.APIError as e:
+                self.root.after(0, self._finish_api)
+                self.root.after(0, self._set_options_enabled, True)
+                self.root.after(0, lambda: messagebox.showerror(
+                    "API Error",
+                    f"The provided API key is invalid or unauthorized:\n{e.message}"
+                ))
+                return
+            except Exception as e:
+                self.root.after(0, self._finish_api)
+                self.root.after(0, self._set_options_enabled, True)
+                self.root.after(0, lambda: messagebox.showerror(
+                    "API Error",
+                    f"An error occurred while contacting the API:\n{e}"
+                ))
+                return
 
         # Show thinking progress bar
         self.progress_label.config(text="Thinking…")
@@ -1039,9 +1060,14 @@ class RPGGame:
                 winsound.PlaySound(
                     wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC
                 )
+        except errors.APIError as e:
+            self.root.after(0, lambda: messagebox.showerror(
+                "API Error",
+                f"Text-to-speech failed:\n{e.message}"
+            ))
         except Exception as e:
             # Non-fatal: just log it
-            print("TTS error:", e)       
+            print("TTS error:", e)
 
     def _set_options_enabled(self, enabled: bool):
         """Enable or disable all choice inputs during API calls."""
@@ -1181,17 +1207,38 @@ class RPGGame:
         def thread_target():
             """Background worker that requests an image from Gemini."""
             start = time.time()
-            response = client.models.generate_images(
-                model=IMAGE_MODEL,
-                prompt=prompt_text,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    include_rai_reason=True,
-                    aspectRatio="16:9",
-                    personGeneration="ALLOW_ADULT"
+            try:
+                response = client.models.generate_images(
+                    model=IMAGE_MODEL,
+                    prompt=prompt_text,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=1,
+                        include_rai_reason=True,
+                        aspectRatio="16:9",
+                        personGeneration="ALLOW_ADULT"
+                    )
                 )
-            )
-            self.last_image_duration = time.time() - start
+                self.last_image_duration = time.time() - start
+            except errors.APIError as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "API Error",
+                    f"Image generation failed:\n{e.message}"
+                ))
+                data = pkg_resources.read_binary("assets", "went_missing.png")
+                placeholder = Image.open(BytesIO(data))
+                self.root.after(0, lambda image=placeholder: self._finish_image_generation(image))
+                self.last_image_duration = time.time() - start
+                return
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "API Error",
+                    f"Image generation failed:\n{e}"
+                ))
+                data = pkg_resources.read_binary("assets", "went_missing.png")
+                placeholder = Image.open(BytesIO(data))
+                self.root.after(0, lambda image=placeholder: self._finish_image_generation(image))
+                self.last_image_duration = time.time() - start
+                return
 
             images = getattr(response, 'generated_images', None)
             if not images:
@@ -1986,21 +2033,25 @@ class RPGGame:
         except errors.APIError as e:
             messagebox.showerror(
                 "Invalid API Key",
-                f"The provided API key is invalid or unauthorized:\n{e.message}"
+                    f"The provided API key is invalid or unauthorized:\n{e.message}"
             )
             return False
         return True
 
     def _handle_new_game(self):
         """Callback for New Game: immediately go to identity prompt."""
+        if not self._validate_api_key():
+            return
         self.menu_win.destroy()
         self._reset_game()
         self._ask_style()
 
     def _handle_load_game(self):
         """Callback for Load Game: immediately open save-slots dialog."""
+        if not self._validate_api_key():
+            return
         self.menu_win.destroy()
-        self._load_game()   
+        self._load_game()
 
     def _on_scene_click(self, event=None):
         """
