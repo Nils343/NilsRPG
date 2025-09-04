@@ -1,0 +1,32 @@
+## STYLE:Grimdark Fantasy
+Player character is immersed in a bleak, morally ambiguous world. Themes include corruption and despair, challenging the character to make morally complex decisions. Magic is powerful but dangerous. Violence and betrayal are commonplace, forcing the character into cautious alliances and tough compromises. Characters are rarely entirely virtuous or villainous, emphasizing shades of grey in their motivations and actions.
+
+## STYLE:Mythic High Fantasy
+Adventures unfold in a grand, vibrant world where heroes perform legendary deeds and confront epic threats. Magic is abundant and majestic, with powerful artifacts and mythical creatures regularly shaping the narrative. The player character navigates ancient prophecies, mighty kingdoms, and celestial conflicts, contributing to sweeping events that impact entire realms. People met are often paragons or destined champions who interact directly with divine beings or cosmic forces. Storylines revolve around honor, destiny, and the struggle between clear forces of good and evil.
+
+## STYLE:Fairy Tale Fantasy
+Employ whimsical, dream-like narratives inspired by folklore and traditional fairy tales. Magic is subtle yet pervasive, often manifesting through enchantments, illusions, or mystical curses. The player character encounters eccentric characters, talking animals, enchanted forests, and moralistic tales where cleverness and kindness typically triumph over brute strength. Adventures emphasize solving riddles, uncovering hidden truths, and navigating morally instructive challenges.
+
+## STYLE:Steampunk Fantasy
+Magical elements fuse with a Victorian-era industrial technology. The player character interacts with steam-powered machinery, airships, intricate clockwork devices, and alchemical contraptions alongside traditional fantasy tropes. Societal themes include class struggles, scientific curiosity versus traditional magic, and the ethics of industrial advancement. Adventures often involve exploration, investigation, espionage, and sabotage within rapidly developing urban or frontier settings. Characters must balance reliance on both magic and technology to overcome challenges.
+
+## STYLE:Dark Fairyland Fantasy
+Blend wonder with unsettling surrealism, set within an enchanting but eerie magical realm. Environments appear beautiful yet harbor subtle dangers, distorted realities, and cryptic inhabitants. Magic feels whimsical but unpredictable, often governed by strange rules or paradoxes that characters must carefully navigate. Adventures revolve around exploration, puzzle-solving, and negotiation with enigmatic beings whose motives remain mysterious. The mood balances a sense of awe and mystery with an underlying tension, reflecting the sinister potential beneath the fantastical façade.
+
+## DIFFICULTY:Peaceful Stroll
+The GM regularly offers guidance, readily provides hints, and frequently intervenes to ensure player success. Challenges are minimal, outcomes lean favorably toward player characters, and character deaths or significant setbacks rarely, if ever, occur. Rules interpretation consistently favors players, and the GM actively ensures the narrative is straightforward, approachable, and forgiving.
+
+## DIFFICULTY:Gentle Adventure
+The GM creates mildly challenging scenarios but ensures solutions are accessible and clear. They occasionally offer hints or nudges when players appear uncertain. Player characters face few severe consequences, and setbacks typically result in manageable complications rather than outright failures. Rules are interpreted flexibly, tending to favor players more often than not.
+
+## DIFFICULTY:Path of Balance
+The GM remains impartial, presenting balanced and fair challenges that genuinely test player skill without bias toward success or failure. They provide minimal guidance, allowing players to face realistic consequences based solely on their decisions. Outcomes strictly follow established rules without preferential interpretation, maintaining equilibrium between difficulty and accessibility.
+
+## DIFFICULTY:Trial by Fire
+The GM designs intricate and demanding challenges requiring substantial creativity, strategic planning, and careful decision-making from players. Assistance or hints are rarely provided, and player choices carry significant risk, often leading to serious consequences if mishandled. Rules are interpreted strictly, and the GM is comfortable enforcing outcomes even when they result in negative consequences or setbacks for player characters.
+
+## DIFFICULTY:Edge of Ruin
+The GM consistently presents highly challenging, unforgiving scenarios designed explicitly to test player ingenuity, resourcefulness, and adaptability under pressure. Little to no guidance or hints are given, and the consequences of failure are severe, potentially including permanent character losses. Rules are rigorously enforced, decisions have lasting impacts, and success requires precise planning, exceptional teamwork, and skilled execution from the players.
+
+## DIFFICULTY:Realm of Despair
+The GM deliberately orchestrates near-impossible scenarios, intentionally obscuring critical information, and presenting overwhelmingly punitive consequences. Hints or guidance are nonexistent, and the outcomes of player decisions almost always result in severe setbacks or catastrophic failures. Rules interpretations are strictly literal, with no allowances or mercy, frequently placing player characters into situations where survival demands near-perfect decision-making, exhaustive planning, improbable luck, and extraordinary ingenuity merely to achieve marginal progress.

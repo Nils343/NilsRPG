@@ -1,0 +1,22 @@
+Nur diff für items/skills/perks generieren. => weniger zuverlässig
+
+Schrift wird kleiner/compressed wenn sie nicht passt
+
+Show explanation for why an attribute is like it is with mouseover.
+
+Sprachausgabe .. Spracheingabe
+
+Bessere Bild AI, open AI bis zu 25 start mit 6 cent, bis 25 cent das Bild. Aber lange Dauer.
+Thinking ... Should be written in the progress bar itself, to save space above it.
+
+Menu:
+Compression für Historie ggfs per klick. Rückgängig machbar wäre kein Problem ..
+Save all pictures with Scene descriptions to generate a kind of story to look at later.
+Bei exit vorher einmal nachfragen
+GM checks for stupid ideas and asks if the player is serious
+
+Bugs:
+Reizing image while turn is processed leads to crash
+in dem custom option, wenn man nicht am ende der zeile ist und return drückt, dann wird nicht direkt abgschickt, sondern vorher ein ezilenumbruch hinzugefügt.
+CHange bei attributes wird nicht angezeigt
+Tooltips können manchmal ausserhalb des Bildschirms angezeigt werden (perks&skills)
