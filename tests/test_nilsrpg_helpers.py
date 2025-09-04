@@ -1,0 +1,59 @@
+import os
+import types
+import sys
+import pathlib
+
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+
+import NilsRPG as nr
+
+
+def test_parse_world_extracts_sections():
+    """Ensure style and difficulty sections are parsed from world.txt."""
+    styles, diffs = nr._parse_world()
+    assert "Grimdark Fantasy" in styles
+    assert styles["Grimdark Fantasy"].startswith("## STYLE:Grimdark Fantasy")
+    assert "Peaceful Stroll" in diffs
+    assert diffs["Peaceful Stroll"].startswith("## DIFFICULTY:Peaceful Stroll")
+
+
+def test_resolve_api_key_precedence(monkeypatch):
+    """Environment variables take precedence over user-level variables."""
+    monkeypatch.setenv("GEMINI_API_KEY", "env_key")
+    monkeypatch.setattr(nr, "get_user_env_var", lambda name: "user_key")
+    assert nr._resolve_api_key() == "env_key"
+    assert os.environ["GEMINI_API_KEY"] == "env_key"
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(nr, "get_user_env_var", lambda name: "user_key")
+    assert nr._resolve_api_key() == "user_key"
+    assert os.environ["GEMINI_API_KEY"] == "user_key"
+
+
+def test_ensure_client_reuses_and_updates(monkeypatch):
+    """Client is created, cached, and recreated when key changes."""
+    class DummyClient:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+    monkeypatch.setattr(nr, "genai", types.SimpleNamespace(Client=DummyClient))
+    monkeypatch.setattr(nr, "get_user_env_var", lambda name: None)
+
+    # reset globals
+    nr.client = None
+    nr._client_key = None
+
+    monkeypatch.setenv("GEMINI_API_KEY", "key1")
+    c1 = nr._ensure_client()
+    assert isinstance(c1, DummyClient)
+    assert c1.api_key == "key1"
+
+    # same key returns same instance
+    c2 = nr._ensure_client()
+    assert c2 is c1
+
+    # changing key creates new client
+    monkeypatch.setenv("GEMINI_API_KEY", "key2")
+    c3 = nr._ensure_client()
+    assert c3 is not c1
+    assert c3.api_key == "key2"
