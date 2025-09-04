@@ -19,7 +19,10 @@ from google import genai
 from google.genai import types, errors
 from ttkbootstrap import Style
 import wave
-import winsound
+try:
+    import winsound
+except ImportError:  # pragma: no cover - non-Windows
+    winsound = None
 
 from models import Attributes, Environment, GameResponse, InventoryItem, PerkSkill
 from utils import clean_unicode, load_embedded_fonts, set_user_env_var
@@ -966,8 +969,11 @@ class RPGGame:
                 wf.setframerate(24000)
                 wf.writeframes(pcm)
             # Stop any previous playback, then play asynchronously
-            winsound.PlaySound(None, winsound.SND_PURGE)
-            winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            if winsound:
+                winsound.PlaySound(None, winsound.SND_PURGE)
+                winsound.PlaySound(
+                    wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC
+                )
         except Exception as e:
             # Non-fatal: just log it
             print("TTS error:", e)       

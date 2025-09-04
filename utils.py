@@ -2,16 +2,23 @@
 
 from collections.abc import Mapping, Sequence
 import unicodedata
-import winreg
-import ctypes
 import os
 import tempfile
 import importlib.resources as pkg_resources
 import sys
 
+if sys.platform.startswith("win"):
+    import ctypes
+    import winreg
+else:  # pragma: no cover - platform specific
+    ctypes = None
+    winreg = None
+
 
 def set_user_env_var(name: str, value: str) -> None:
     """Write a user-level environment variable on Windows."""
+    if not sys.platform.startswith("win") or winreg is None:  # pragma: no cover
+        raise OSError("set_user_env_var is only supported on Windows")
     reg_key = winreg.OpenKey(
         winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
     )
@@ -45,16 +52,17 @@ def clean_unicode(obj):
 
 def load_embedded_fonts() -> None:
     """Register fonts embedded in the assets package."""
-    if sys.platform.startswith("win"):
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        fr_private = 0x10
-        for family_dir in ("Cormorant_Garamond", "Cardo"):
-            pkg = f"assets.{family_dir}"
-            for font_name in pkg_resources.contents(pkg):
-                if font_name.lower().endswith((".ttf", ".otf")):
-                    data = pkg_resources.read_binary(pkg, font_name)
-                    tmpdir = tempfile.gettempdir()
-                    path = os.path.join(tmpdir, font_name)
-                    with open(path, "wb") as f:
-                        f.write(data)
-                    ctypes.windll.gdi32.AddFontResourceExW(path, fr_private, 0)
+    if not sys.platform.startswith("win") or ctypes is None:  # pragma: no cover
+        return
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    fr_private = 0x10
+    for family_dir in ("Cormorant_Garamond", "Cardo"):
+        pkg = f"assets.{family_dir}"
+        for font_name in pkg_resources.contents(pkg):
+            if font_name.lower().endswith((".ttf", ".otf")):
+                data = pkg_resources.read_binary(pkg, font_name)
+                tmpdir = tempfile.gettempdir()
+                path = os.path.join(tmpdir, font_name)
+                with open(path, "wb") as f:
+                    f.write(data)
+                ctypes.windll.gdi32.AddFontResourceExW(path, fr_private, 0)
