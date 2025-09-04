@@ -12,11 +12,11 @@ import os.path
 import pickle
 import re
 import sys
-import tempfile
 import queue
 import threading
 import time
 import uuid
+import asyncio
 import tkinter as tk
 from pathlib import Path
 from io import BytesIO
@@ -27,11 +27,6 @@ from PIL import Image, ImageTk
 from google import genai
 from google.genai import types, errors
 from ttkbootstrap import Style
-import wave
-try:
-    import winsound
-except ImportError:  # pragma: no cover - non-Windows
-    winsound = None
 
 import numpy as np
 try:
@@ -56,9 +51,8 @@ DEBUG_TTS = os.environ.get("RPG_DEBUG_TTS") == "1"
 # These constants declare which Gemini model powers each content stream.
 MODEL = "gemini-2.5-flash"  # Primary text model powering narrative responses.
 #AUDIO_MODEL = "gemini-2.5-pro-preview-tts"
-AUDIO_MODEL = (
-    "gemini-2.5-flash-preview-tts"
-)  # Text-to-speech model for converting narration to audio.
+AUDIO_MODEL = "gemini-live-2.5-flash-preview"  # Live TTS model for narration.
+AUDIO_VOICE = "Algenib"  # Default voice used for narration.
 #IMAGE_MODEL = "imagen-4.0-generate-001"  # Baseline image generation model.
 #IMAGE_MODEL = "imagen-4.0-ultra-generate-001"  # High quality image model.
 IMAGE_MODEL = "imagen-4.0-fast-generate-001"  # Fast default image model.
@@ -1079,8 +1073,6 @@ class RPGGame:
                 except Exception:
                     pass
                 self._audio_stream = None
-        if winsound:
-            winsound.PlaySound(None, winsound.SND_PURGE)
 
     def _clear_narration(self):
         """Stop audio and empty any queued narration segments."""
@@ -1096,93 +1088,86 @@ class RPGGame:
         self._debug_logged_once = False
 
     def _speak_situation(self, text: str):
-        """Generate and play a fantasy-style male narration of `text`."""
-        if not SOUND_ENABLED:
+        """Generate and play a fantasy-style narration of `text` using Gemini Live."""
+        if not SOUND_ENABLED or not HAVE_SD:
             return
         self._stop_audio()
-        try:
-            narration = (
-                "You are a skilled fantasy narrator. "
-                "Read VERBATIM—no additions.\n\n"
-                "[SCRIPT START]\n" + text + "\n[SCRIPT END]"
-            )
-            stream = client.models.generate_content_stream(
+
+        narration = (
+            "You are a skilled fantasy narrator. "
+            "Read VERBATIM—no additions.\n\n"
+            "[SCRIPT START]\n" + text + "\n[SCRIPT END]"
+        )
+
+        async def _run():
+            t_audio_first_chunk = None
+            t_audio_play_start = None
+            async with client.aio.live.connect(
                 model=AUDIO_MODEL,
-                contents=narration,
-                config=types.GenerateContentConfig(
+                config=types.LiveConnectConfig(
                     response_modalities=["AUDIO"],
                     speech_config=types.SpeechConfig(
                         voice_config=types.VoiceConfig(
                             prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                voice_name="Algenib"  # resonant, dynamic male voice
+                                voice_name=AUDIO_VOICE
                             )
                         )
                     ),
                 ),
-            )
-
-            t_audio_first_chunk = None
-            t_audio_play_start = None
-
-            sd_stream = None
-            wav_path = None
-            wf = None
-
-            for chunk in stream:
-                if getattr(chunk, "usage_metadata", None):
-                    self.total_audio_prompt_tokens += (
-                        chunk.usage_metadata.prompt_token_count or 0
+            ) as session:
+                await session.send_client_content(
+                    turns=types.Content(
+                        role="user",
+                        parts=[types.Part(text=narration)],
                     )
-                    self.total_audio_output_tokens += (
-                        chunk.usage_metadata.candidates_token_count or 0
+                )
+                with self._audio_stream_lock:
+                    sd_stream = sd.OutputStream(
+                        samplerate=24000,
+                        channels=1,
+                        dtype="int16",
                     )
-                part = chunk.candidates[0].content.parts[0]
-                if getattr(part, "inline_data", None):
-                    data = part.inline_data.data
-                    if t_audio_first_chunk is None:
-                        t_audio_first_chunk = time.time()
-                        if HAVE_SD:
-                            with self._audio_stream_lock:
-                                sd_stream = sd.OutputStream(
-                                    samplerate=24000,
-                                    channels=1,
-                                    dtype="int16",
-                                )
-                                sd_stream.start()
-                                self._audio_stream = sd_stream
-                        else:
-                            wav_path = os.path.join(
-                                tempfile.gettempdir(),
-                                f"nils_rpg_tts_{int(time.time())}.wav",
-                            )
-                            wf = wave.open(wav_path, "wb")
-                            wf.setnchannels(1)
-                            wf.setsampwidth(2)
-                            wf.setframerate(24000)
-                    if HAVE_SD and sd_stream is not None:
-                        sd_stream.write(np.frombuffer(data, dtype=np.int16))
-                        if t_audio_play_start is None:
+                    sd_stream.start()
+                    self._audio_stream = sd_stream
+                async for msg in session.receive():
+                    if msg.usage_metadata:
+                        self.total_audio_prompt_tokens += (
+                            msg.usage_metadata.prompt_token_count or 0
+                        )
+                        self.total_audio_output_tokens += (
+                            msg.usage_metadata.candidates_token_count or 0
+                        )
+                    data = msg.data
+                    if data:
+                        if t_audio_first_chunk is None:
+                            t_audio_first_chunk = time.time()
                             t_audio_play_start = time.time()
-                    elif wf is not None:
-                        wf.writeframes(data)
-
-            if HAVE_SD and sd_stream is not None:
+                        sd_stream.write(np.frombuffer(data, dtype=np.int16))
                 with self._audio_stream_lock:
                     sd_stream.stop()
                     sd_stream.close()
                     self._audio_stream = None
-            elif wf is not None:
-                wf.close()
-                if winsound:
-                    winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-                    t_audio_play_start = time.time()
+            return t_audio_first_chunk, t_audio_play_start
+
+        try:
+            t_audio_first_chunk, t_audio_play_start = asyncio.run(_run())
         except Exception as e:
             # Non-fatal: just log it
             print("TTS error:", e)
+            t_audio_first_chunk = t_audio_play_start = None
         finally:
-            if DEBUG_TTS and t_audio_first_chunk and t_audio_play_start and self._debug_t_text_done is not None:
-                print(f"Model→audio-bytes: {t_audio_first_chunk - self._debug_t_text_done:.3f}s")
-                print(f"Bytes→audible: {t_audio_play_start - t_audio_first_chunk:.3f}s")
+            if (
+                DEBUG_TTS
+                and t_audio_first_chunk
+                and t_audio_play_start
+                and self._debug_t_text_done is not None
+            ):
+                print(
+                    f"Model→audio-bytes: {t_audio_first_chunk - self._debug_t_text_done:.3f}s"
+                )
+                print(
+                    f"Bytes→audible: {t_audio_play_start - t_audio_first_chunk:.3f}s"
+                )
                 self._debug_logged_once = True
             self._debug_t_text_done = None
 
@@ -2055,6 +2040,7 @@ class RPGGame:
         text_model_var  = tk.StringVar(value=MODEL)
         image_model_var = tk.StringVar(value=IMAGE_MODEL)
         audio_model_var = tk.StringVar(value=AUDIO_MODEL)
+        voice_var       = tk.StringVar(value=AUDIO_VOICE)
 
         frm = ttk.Frame(win, padding=20)
         frm.pack(fill=tk.BOTH, expand=True)
@@ -2079,6 +2065,9 @@ class RPGGame:
 
         ttk.Label(frm, text="Sound Model:").grid(row=5, column=0, sticky="w", pady=(10,0))
         ttk.Entry(frm, textvariable=audio_model_var, width=60).grid(row=5, column=2, sticky="w", pady=(10,0))
+
+        ttk.Label(frm, text="Sound Voice:").grid(row=6, column=0, sticky="w", pady=(10,0))
+        ttk.Entry(frm, textvariable=voice_var, width=60).grid(row=6, column=2, sticky="w", pady=(10,0))
 
         btns = ttk.Frame(win, padding=(0,0,20,20))
         btns.pack(fill=tk.X, side=tk.BOTTOM)
@@ -2120,6 +2109,9 @@ class RPGGame:
 
             global AUDIO_MODEL
             AUDIO_MODEL = audio_model_var.get().strip()
+
+            global AUDIO_VOICE
+            AUDIO_VOICE = voice_var.get().strip()
 
             win.destroy()
 
