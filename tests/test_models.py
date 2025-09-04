@@ -6,6 +6,8 @@ from models import GameResponse, Environment, InventoryItem, PerkSkill, Attribut
 
 
 def test_game_response_parsing():
+    """Ensure that raw dictionaries deserialize into typed models correctly."""
+
     data = {
         'day': 1,
         'time': 'morning',

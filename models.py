@@ -4,10 +4,14 @@ from pydantic import BaseModel
 
 
 class IdentitiesResponse(BaseModel):
+    """Response model for identity suggestions returned by the back-end."""
+
     identities: list[str]
 
 
 class InventoryItem(BaseModel):
+    """Represents a single item held by the player."""
+
     name: str
     description: str
     weight: float
@@ -15,12 +19,16 @@ class InventoryItem(BaseModel):
 
 
 class PerkSkill(BaseModel):
+    """Models a perk or skill with its level and description."""
+
     name: str
     degree: str
     description: str
 
 
 class Attributes(BaseModel):
+    """Character statistics reflecting physical and mental state."""
+
     Name: str
     Background: str
     Age: str
@@ -32,6 +40,8 @@ class Attributes(BaseModel):
 
 
 class Environment(BaseModel):
+    """Environmental conditions impacting the character."""
+
     Location: str
     Daytime: str
     Light: str
@@ -42,6 +52,8 @@ class Environment(BaseModel):
 
 
 class GameResponse(BaseModel):
+    """Full response returned from the game engine for a player's action."""
+
     day: int
     time: str
     current_situation: str
