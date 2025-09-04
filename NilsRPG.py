@@ -17,6 +17,7 @@ import threading
 import time
 import uuid
 import tkinter as tk
+from pathlib import Path
 from io import BytesIO
 from tkinter import ttk, messagebox, font as tkfont
 
@@ -35,6 +36,7 @@ from models import Attributes, Environment, GameResponse, InventoryItem, PerkSki
 from utils import clean_unicode, load_embedded_fonts, set_user_env_var
 
 IMAGE_GENERATION_ENABLED = False
+SOUND_ENABLED = True
 
 # --- Model configuration -------------------------------------------------
 # These constants declare which Gemini model powers each content stream.
@@ -46,6 +48,16 @@ AUDIO_MODEL = (
 #IMAGE_MODEL = "imagen-4.0-generate-001"  # Baseline image generation model.
 #IMAGE_MODEL = "imagen-4.0-ultra-generate-001"  # High quality image model.
 IMAGE_MODEL = "imagen-4.0-fast-generate-001"  # Fast default image model.
+
+# --- Model pricing -------------------------------------------------------
+# Pricing data is loaded from an external JSON file to allow easy updates
+# when Google adjusts model rates.
+COST_FILE = Path(__file__).with_name("model_costs.json")
+try:
+    with COST_FILE.open("r", encoding="utf-8") as f:
+        MODEL_COSTS = json.load(f)
+except FileNotFoundError:  # pragma: no cover - file should exist in repo
+    MODEL_COSTS = {}
 
 # --- Attribute explanations ---
 # These explanations supply tooltip text for the GUI and provide players with
@@ -140,6 +152,9 @@ class RPGGame:
         self.total_prompt_tokens = 0
         self.last_completion_tokens = 0
         self.total_completion_tokens = 0
+        # Narration token tracking (text-to-speech)
+        self.total_audio_prompt_tokens = 0
+        self.total_audio_output_tokens = 0
         self.total_images = 0
 
         # Track the last image prompt for consistency
@@ -735,11 +750,12 @@ class RPGGame:
                         self.root.after(0, lambda txt=decoded: self._stream_situation(txt))
                         # Speak the full situation immediately (in a separate thread)
                         full_text = (self._current_situation_streamed or "") + decoded
-                        threading.Thread(
-                            target=self._speak_situation,
-                            args=(full_text,),
-                            daemon=True
-                        ).start()                        
+                        if SOUND_ENABLED:
+                            threading.Thread(
+                                target=self._speak_situation,
+                                args=(full_text,),
+                                daemon=True
+                            ).start()
                         # remove through the closing quote
                         buf = buf[i+1:]
                         done_situation = True
@@ -967,6 +983,8 @@ class RPGGame:
     # --- Read the just-streamed situation out loud (Gemini TTS) ---
     def _speak_situation(self, text: str):
         """Generate and play a fantasy-style male narration of `text`."""
+        if not SOUND_ENABLED:
+            return
         try:
             narration = (
                 "You are a skilled fantasy narrator. "
@@ -974,7 +992,7 @@ class RPGGame:
                 "[SCRIPT START]\n" + text + "\n[SCRIPT END]"
             )
             resp = client.models.generate_content(
-                model=AUDIO_MODEL, 
+                model=AUDIO_MODEL,
                 contents=narration,
                 config=types.GenerateContentConfig(
                     response_modalities=["AUDIO"],
@@ -987,6 +1005,14 @@ class RPGGame:
                     ),
                 ),
             )
+            # Track narration token usage for cost calculations
+            if getattr(resp, "usage_metadata", None):
+                self.total_audio_prompt_tokens += (
+                    resp.usage_metadata.prompt_token_count or 0
+                )
+                self.total_audio_output_tokens += (
+                    resp.usage_metadata.candidates_token_count or 0
+                )
             # PCM 16-bit @ 24 kHz → wrap into a WAV file and play
             pcm = resp.candidates[0].content.parts[0].inline_data.data
             wav_path = os.path.join(
@@ -1335,23 +1361,50 @@ class RPGGame:
         # bring window to front
         win.focus_force()
 
-        # Compute costs
-        cost_prompt     = self.total_prompt_tokens    / 1_000_000 * 0.15
-        cost_completion = self.total_completion_tokens/ 1_000_000 * 0.60
-        cost_images     = self.total_images          * 0.03
-        cost_total      = cost_prompt + cost_completion + cost_images
+        # Compute costs based on external pricing data
+        text_rates  = MODEL_COSTS.get(MODEL, {})
+        audio_rates = MODEL_COSTS.get(AUDIO_MODEL, {})
+        image_rates = MODEL_COSTS.get(IMAGE_MODEL, {})
+
+        cost_text_prompt = (
+            self.total_prompt_tokens * text_rates.get("input_cost_per_token", 0)
+        )
+        cost_text_completion = (
+            self.total_completion_tokens
+            * text_rates.get("output_cost_per_token", 0)
+        )
+        cost_audio_prompt = (
+            self.total_audio_prompt_tokens
+            * audio_rates.get("input_cost_per_token", 0)
+        )
+        cost_audio_output = (
+            self.total_audio_output_tokens
+            * audio_rates.get("output_cost_per_token", 0)
+        )
+        cost_images = (
+            self.total_images * image_rates.get("output_cost_per_image", 0)
+        )
+
+        cost_text_tokens = cost_text_prompt + cost_text_completion
+        cost_audio_tokens = cost_audio_prompt + cost_audio_output
+        cost_prompt = cost_text_prompt + cost_audio_prompt
+        cost_completion = cost_text_completion + cost_audio_output
+        cost_total = cost_text_tokens + cost_audio_tokens + cost_images
 
         # Prepare rows: (Metric, Value)
         rows = [
-            ("Last-turn prompt tokens",     f"{self.last_prompt_tokens}"),
-            ("Last-turn completion tokens", f"{self.last_completion_tokens}"),
-            ("Total prompt tokens",         f"{self.total_prompt_tokens}"),
-            ("Total completion tokens",     f"{self.total_completion_tokens}"),
-            ("Total images generated",      f"{self.total_images}"),
-            ("Total tokens cost",           f"${cost_prompt + cost_completion:,.4f}"),
-            ("Total image generation cost", f"${cost_images:,.2f}"),
-            ("Average cost per turn",       f"${cost_total/max(1,self.turn):,.4f}"),
-            ("Grand total cost",            f"${cost_total:,.4f}"),
+            ("Last-turn prompt tokens",         f"{self.last_prompt_tokens}"),
+            ("Last-turn completion tokens",     f"{self.last_completion_tokens}"),
+            ("Total prompt tokens",             f"{self.total_prompt_tokens}"),
+            ("Total completion tokens",         f"{self.total_completion_tokens}"),
+            ("Total narration prompt tokens",   f"{self.total_audio_prompt_tokens}"),
+            ("Total narration output tokens",   f"{self.total_audio_output_tokens}"),
+            ("Total images generated",          f"{self.total_images}"),
+            ("Total text token cost",           f"${cost_text_tokens:,.4f}"),
+            ("Total narration token cost",      f"${cost_audio_tokens:,.4f}"),
+            ("Total image generation cost",     f"${cost_images:,.2f}"),
+            ("Average cost per turn",           f"${cost_total/max(1,self.turn):,.4f}"),
+            ("Grand total cost",                f"${cost_total:,.4f}"),
         ]
 
         # Frame to hold the Treeview
@@ -1823,9 +1876,12 @@ class RPGGame:
         win.bind("<Escape>", lambda e: win.destroy())
 
         # Variables
-        api_key_var = tk.StringVar(value=os.environ.get("GEMINI_API_KEY", ""))
-        img_var     = tk.BooleanVar(value=IMAGE_GENERATION_ENABLED)
-        model_var   = tk.StringVar(value=MODEL)
+        api_key_var     = tk.StringVar(value=os.environ.get("GEMINI_API_KEY", ""))
+        img_var         = tk.BooleanVar(value=IMAGE_GENERATION_ENABLED)
+        sound_var       = tk.BooleanVar(value=SOUND_ENABLED)
+        text_model_var  = tk.StringVar(value=MODEL)
+        image_model_var = tk.StringVar(value=IMAGE_MODEL)
+        audio_model_var = tk.StringVar(value=AUDIO_MODEL)
 
         frm = ttk.Frame(win, padding=20)
         frm.pack(fill=tk.BOTH, expand=True)
@@ -1839,8 +1895,17 @@ class RPGGame:
         ttk.Label(frm, text="Automatic Image:  ").grid(row=1, column=0, sticky="w", pady=(10,0))
         ttk.Checkbutton(frm, variable=img_var).grid(row=1, column=2, sticky="w", pady=(10,0))
 
-        ttk.Label(frm, text="Gemini Model:").grid(row=2, column=0, sticky="w", pady=(10,0))
-        ttk.Entry(frm, textvariable=model_var, width=60).grid(row=2, column=2, sticky="w", pady=(10,0))
+        ttk.Label(frm, text="Narrate Situation:").grid(row=2, column=0, sticky="w", pady=(10,0))
+        ttk.Checkbutton(frm, variable=sound_var).grid(row=2, column=2, sticky="w", pady=(10,0))
+
+        ttk.Label(frm, text="Text Model:").grid(row=3, column=0, sticky="w", pady=(10,0))
+        ttk.Entry(frm, textvariable=text_model_var, width=60).grid(row=3, column=2, sticky="w", pady=(10,0))
+
+        ttk.Label(frm, text="Image Model:").grid(row=4, column=0, sticky="w", pady=(10,0))
+        ttk.Entry(frm, textvariable=image_model_var, width=60).grid(row=4, column=2, sticky="w", pady=(10,0))
+
+        ttk.Label(frm, text="Sound Model:").grid(row=5, column=0, sticky="w", pady=(10,0))
+        ttk.Entry(frm, textvariable=audio_model_var, width=60).grid(row=5, column=2, sticky="w", pady=(10,0))
 
         btns = ttk.Frame(win, padding=(0,0,20,20))
         btns.pack(fill=tk.X, side=tk.BOTTOM)
@@ -1870,8 +1935,17 @@ class RPGGame:
             global IMAGE_GENERATION_ENABLED
             IMAGE_GENERATION_ENABLED = img_var.get()
 
+            global SOUND_ENABLED
+            SOUND_ENABLED = sound_var.get()
+
             global MODEL
-            MODEL = model_var.get().strip()
+            MODEL = text_model_var.get().strip()
+
+            global IMAGE_MODEL
+            IMAGE_MODEL = image_model_var.get().strip()
+
+            global AUDIO_MODEL
+            AUDIO_MODEL = audio_model_var.get().strip()
 
             win.destroy()
 
