@@ -1121,18 +1121,14 @@ class RPGGame:
                     )
                     sd_stream.start()
                     self._audio_stream = sd_stream
+                last_usage = None
                 async for msg in session.receive():
                     if msg.usage_metadata:
-                        self.total_audio_prompt_tokens += (
-                            msg.usage_metadata.prompt_token_count or 0
-                        )
-                        # `response_token_count` contains the number of tokens
-                        # generated in the audio response. The previous
-                        # `candidates_token_count` attribute is not provided by
-                        # the API, which triggered an AttributeError.
-                        self.total_audio_output_tokens += (
-                            msg.usage_metadata.response_token_count or 0
-                        )
+                        # The SDK reports cumulative token counts for the stream
+                        # in `usage_metadata` on each message.  Record the last
+                        # seen values and apply them after the stream finishes so
+                        # tokens are only counted once.
+                        last_usage = msg.usage_metadata
                     data = msg.data
                     if data:
                         if t_audio_first_chunk is None:
@@ -1143,6 +1139,16 @@ class RPGGame:
                     sd_stream.stop()
                     sd_stream.close()
                     self._audio_stream = None
+                if last_usage:
+                    self.total_audio_prompt_tokens += (
+                        last_usage.prompt_token_count or 0
+                    )
+                    # `response_token_count` reports the tokens generated in the
+                    # audio response. Some older attributes such as
+                    # `candidates_token_count` are no longer provided by the API.
+                    self.total_audio_output_tokens += (
+                        last_usage.response_token_count or 0
+                    )
             return t_audio_first_chunk, t_audio_play_start
 
         try:
