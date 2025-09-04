@@ -2,3 +2,5 @@ google-genai
 pydantic>=2
 ttkbootstrap
 Pillow
+numpy
+sounddevice

@@ -13,6 +13,7 @@ import pickle
 import re
 import sys
 import tempfile
+import queue
 import threading
 import time
 import uuid
@@ -32,6 +33,13 @@ try:
 except ImportError:  # pragma: no cover - non-Windows
     winsound = None
 
+import numpy as np
+try:
+    import sounddevice as sd
+    HAVE_SD = True
+except Exception:  # pragma: no cover - missing sounddevice
+    HAVE_SD = False
+
 from models import Attributes, Environment, GameResponse, InventoryItem, PerkSkill
 from utils import (
     clean_unicode,
@@ -42,6 +50,7 @@ from utils import (
 
 IMAGE_GENERATION_ENABLED = False
 SOUND_ENABLED = True
+DEBUG_TTS = os.environ.get("RPG_DEBUG_TTS") == "1"
 
 # --- Model configuration -------------------------------------------------
 # These constants declare which Gemini model powers each content stream.
@@ -197,7 +206,19 @@ class RPGGame:
 
         # Track the last image prompt for consistency
         self.previous_image_prompt = None
-        self._loading = False        
+        self._loading = False
+
+        # Audio streaming state
+        self._audio_stream = None
+        self._audio_stream_lock = threading.Lock()
+
+        # Sentence-level narration queue
+        self._narration_buffer = ""
+        self._narration_queue = queue.Queue()
+        self._narration_worker_started = False
+        self._debug_t_text_done = None
+        self._tts_warmed = False
+        self._debug_logged_once = False
 
         # Directory for saving every generated image
         self.image_save_dir = os.path.join(
@@ -296,10 +317,13 @@ class RPGGame:
         self.past_situations = []
         self.past_options = []
         self.past_days       = []
-        self.past_times      = []        
+        self.past_times      = []
 
         # Build UI; defer starting a new game until the menu is used
         self._build_gui()
+
+        # Start background narration worker
+        self._ensure_narration_worker()
 
     def _append_choice_and_blank(self):
         """Insert the last chosen option plus an empty line, before streaming the new situation."""
@@ -593,6 +617,7 @@ class RPGGame:
 
     def _on_submit(self):
         """Handle user submission of a chosen or custom option."""
+        self._clear_narration()
         # cancel any in‐flight image generation
         self._image_generation_cancel.set()
 
@@ -624,6 +649,7 @@ class RPGGame:
             try:
                 # Collect the streamed situation text for TTS.
                 self._current_situation_streamed = ""
+                self._clear_narration()
     
                 # advance our local turn counter (initial remains turn 1)
                 if not initial:
@@ -708,6 +734,13 @@ class RPGGame:
                 _ensure_client()
                 if client is None:
                     raise RuntimeError("No API client available")
+                if SOUND_ENABLED and not self._tts_warmed:
+                    threading.Thread(
+                        target=self._speak_situation,
+                        args=("Ready.",),
+                        daemon=True,
+                    ).start()
+                    self._tts_warmed = True
                 stream = client.models.generate_content_stream(
                     model=MODEL,
                     contents=prompt,
@@ -795,14 +828,6 @@ class RPGGame:
                                 decoded = raw_value
                             # stream final fragment
                             self.root.after(0, lambda txt=decoded: self._stream_situation(txt))
-                            # Speak the full situation immediately (in a separate thread)
-                            full_text = (self._current_situation_streamed or "") + decoded
-                            if SOUND_ENABLED:
-                                threading.Thread(
-                                    target=self._speak_situation,
-                                    args=(full_text,),
-                                    daemon=True
-                                ).start()
                             # remove through the closing quote
                             buf = buf[i+1:]
                             done_situation = True
@@ -819,7 +844,8 @@ class RPGGame:
                         # clear buf so we don't reprocess these chars
                         buf = ""
     
-                # 4) After the loop completes, parse the full JSON
+                # 4) After the loop completes, flush any remaining narration and parse the full JSON
+                self.root.after(0, self._flush_narration_buffer)
                 gr = GameResponse.model_validate_json(json_output)
                 data = gr.model_dump()           # all fields as a dictionary
                 cleaned = clean_unicode(data)           # recursively filter all strings
@@ -1008,12 +1034,12 @@ class RPGGame:
         self.root.bind("<Key>", self._on_alpha_key)
 
         # clear selection once new options are in place
-        self.selected_option.set(0)        
+        self.selected_option.set(0)
 
         # automatically save game state after UI has been fully updated
         # suppress auto-save during loading
         if not getattr(self, '_loading', False):
-            self._save_game()     
+            self._save_game()
 
     def _on_alpha_key(self, event):
         """If an A–Z key is pressed outside the custom box,
@@ -1029,13 +1055,51 @@ class RPGGame:
                 self.custom_entry.focus_set()
                 # prevent further handling
                 return "break"
-       # otherwise let other handlers run        
+       # otherwise let other handlers run
 
     # --- Read the just-streamed situation out loud (Gemini TTS) ---
+    def _ensure_narration_worker(self):
+        if not self._narration_worker_started:
+            threading.Thread(target=self._narration_worker, daemon=True).start()
+            self._narration_worker_started = True
+
+    def _narration_worker(self):
+        while True:
+            segment = self._narration_queue.get()
+            self._speak_situation(segment)
+            self._narration_queue.task_done()
+
+    def _stop_audio(self):
+        """Stop any currently playing audio stream."""
+        with self._audio_stream_lock:
+            if self._audio_stream is not None:
+                try:
+                    self._audio_stream.stop()
+                    self._audio_stream.close()
+                except Exception:
+                    pass
+                self._audio_stream = None
+        if winsound:
+            winsound.PlaySound(None, winsound.SND_PURGE)
+
+    def _clear_narration(self):
+        """Stop audio and empty any queued narration segments."""
+        self._stop_audio()
+        while not self._narration_queue.empty():
+            try:
+                self._narration_queue.get_nowait()
+                self._narration_queue.task_done()
+            except queue.Empty:
+                break
+        self._narration_buffer = ""
+        self._debug_t_text_done = None
+        self._debug_logged_once = False
+
     def _speak_situation(self, text: str):
         """Generate and play a fantasy-style male narration of `text`."""
         if not SOUND_ENABLED:
             return
+        self._stop_audio()
         try:
             narration = (
                 "You are a skilled fantasy narrator. "
@@ -1056,15 +1120,14 @@ class RPGGame:
                     ),
                 ),
             )
-            wav_path = os.path.join(
-                tempfile.gettempdir(), f"nils_rpg_tts_{int(time.time())}.wav"
-            )
-            wf = wave.open(wav_path, "wb")
-            wf.setnchannels(1)
-            wf.setsampwidth(2)       # 16-bit
-            wf.setframerate(24000)
-            audio_chunks = []
-            started = False
+
+            t_audio_first_chunk = None
+            t_audio_play_start = None
+
+            sd_stream = None
+            wav_path = None
+            wf = None
+
             for chunk in stream:
                 if getattr(chunk, "usage_metadata", None):
                     self.total_audio_prompt_tokens += (
@@ -1076,19 +1139,52 @@ class RPGGame:
                 part = chunk.candidates[0].content.parts[0]
                 if getattr(part, "inline_data", None):
                     data = part.inline_data.data
-                    audio_chunks.append(data)
-                    wf.writeframes(data)
-                    if not started and winsound:
-                        wf._file.flush()
-                        winsound.PlaySound(None, winsound.SND_PURGE)
-                        winsound.PlaySound(
-                            wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC
-                        )
-                        started = True
-            wf.close()
+                    if t_audio_first_chunk is None:
+                        t_audio_first_chunk = time.time()
+                        if HAVE_SD:
+                            with self._audio_stream_lock:
+                                sd_stream = sd.OutputStream(
+                                    samplerate=24000,
+                                    channels=1,
+                                    dtype="int16",
+                                )
+                                sd_stream.start()
+                                self._audio_stream = sd_stream
+                        else:
+                            wav_path = os.path.join(
+                                tempfile.gettempdir(),
+                                f"nils_rpg_tts_{int(time.time())}.wav",
+                            )
+                            wf = wave.open(wav_path, "wb")
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(24000)
+                    if HAVE_SD and sd_stream is not None:
+                        sd_stream.write(np.frombuffer(data, dtype=np.int16))
+                        if t_audio_play_start is None:
+                            t_audio_play_start = time.time()
+                    elif wf is not None:
+                        wf.writeframes(data)
+
+            if HAVE_SD and sd_stream is not None:
+                with self._audio_stream_lock:
+                    sd_stream.stop()
+                    sd_stream.close()
+                    self._audio_stream = None
+            elif wf is not None:
+                wf.close()
+                if winsound:
+                    winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                    t_audio_play_start = time.time()
         except Exception as e:
             # Non-fatal: just log it
-            print("TTS error:", e)       
+            print("TTS error:", e)
+        finally:
+            if DEBUG_TTS and t_audio_first_chunk and t_audio_play_start and self._debug_t_text_done is not None:
+                print(f"Model→audio-bytes: {t_audio_first_chunk - self._debug_t_text_done:.3f}s")
+                print(f"Bytes→audible: {t_audio_play_start - t_audio_first_chunk:.3f}s")
+                self._debug_logged_once = True
+            self._debug_t_text_done = None
 
     def _set_options_enabled(self, enabled: bool):
         """Enable or disable all choice inputs during API calls."""
@@ -1356,7 +1452,27 @@ class RPGGame:
         self.situation_text.see(tk.END)
         self.situation_text.config(state='disabled')
         # Also keep a full copy so TTS can read it verbatim once complete.
-        self._current_situation_streamed += text                
+        self._current_situation_streamed += text
+        self._narration_buffer += text
+        while True:
+            m = re.search(r'[.!?]', self._narration_buffer)
+            if not m:
+                break
+            end = m.end()
+            sentence = self._narration_buffer[:end]
+            self._narration_buffer = self._narration_buffer[end:]
+            if DEBUG_TTS and self._debug_t_text_done is None and not self._debug_logged_once:
+                self._debug_t_text_done = time.time()
+            if SOUND_ENABLED:
+                self._narration_queue.put(sentence)
+
+    def _flush_narration_buffer(self):
+        if self._narration_buffer.strip():
+            if DEBUG_TTS and self._debug_t_text_done is None and not self._debug_logged_once:
+                self._debug_t_text_done = time.time()
+            if SOUND_ENABLED:
+                self._narration_queue.put(self._narration_buffer)
+        self._narration_buffer = ""
 
     def _open_menu(self):
         """Display the main menu overlay with available actions."""
