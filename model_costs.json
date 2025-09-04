@@ -1,0 +1,16 @@
+{
+  "gemini-2.5-flash": {
+    "input_cost_per_token": 3e-7,
+    "output_cost_per_token": 2.5e-6,
+    "source": "https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+  },
+  "gemini-2.5-flash-preview-tts": {
+    "input_cost_per_token": 1.5e-7,
+    "output_cost_per_token": 6e-7,
+    "source": "https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+  },
+  "imagen-4.0-fast-generate-001": {
+    "output_cost_per_image": 0.02,
+    "source": "https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+  }
+}
