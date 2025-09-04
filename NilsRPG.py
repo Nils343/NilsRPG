@@ -855,7 +855,11 @@ class RPGGame:
                 if last_usage is not None:
                     self.last_prompt_tokens = last_usage.prompt_token_count
                     self.total_prompt_tokens += self.last_prompt_tokens
-                    self.last_completion_tokens = last_usage.candidates_token_count
+                    # The UsageMetadata object exposes `response_token_count` to
+                    # report how many tokens were generated in the response.
+                    # Earlier this code tried to read `candidates_token_count`,
+                    # which no longer exists and caused an AttributeError.
+                    self.last_completion_tokens = last_usage.response_token_count
                     self.total_completion_tokens += self.last_completion_tokens
     
                 self.last_api_duration = time.time() - start_api
@@ -1119,8 +1123,12 @@ class RPGGame:
                         self.total_audio_prompt_tokens += (
                             msg.usage_metadata.prompt_token_count or 0
                         )
+                        # `response_token_count` contains the number of tokens
+                        # generated in the audio response. The previous
+                        # `candidates_token_count` attribute is not provided by
+                        # the API, which triggered an AttributeError.
                         self.total_audio_output_tokens += (
-                            msg.usage_metadata.candidates_token_count or 0
+                            msg.usage_metadata.response_token_count or 0
                         )
                     data = msg.data
                     if data:
