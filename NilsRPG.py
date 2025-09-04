@@ -40,6 +40,7 @@ from utils import (
     load_embedded_fonts,
     set_user_env_var,
     get_user_env_var,
+    get_response_tokens,
 )
 
 IMAGE_GENERATION_ENABLED = False
@@ -855,11 +856,11 @@ class RPGGame:
                 if last_usage is not None:
                     self.last_prompt_tokens = last_usage.prompt_token_count
                     self.total_prompt_tokens += self.last_prompt_tokens
-                    # The UsageMetadata object exposes `response_token_count` to
-                    # report how many tokens were generated in the response.
-                    # Earlier this code tried to read `candidates_token_count`,
-                    # which no longer exists and caused an AttributeError.
-                    self.last_completion_tokens = last_usage.response_token_count
+                    # The usage metadata object has reported response tokens
+                    # under different attribute names across SDK versions.
+                    # Use a helper that handles both to stay backwards
+                    # compatible.
+                    self.last_completion_tokens = get_response_tokens(last_usage)
                     self.total_completion_tokens += self.last_completion_tokens
     
                 self.last_api_duration = time.time() - start_api
@@ -1143,12 +1144,10 @@ class RPGGame:
                     self.total_audio_prompt_tokens += (
                         last_usage.prompt_token_count or 0
                     )
-                    # `response_token_count` reports the tokens generated in the
-                    # audio response. Some older attributes such as
-                    # `candidates_token_count` are no longer provided by the API.
-                    self.total_audio_output_tokens += (
-                        last_usage.response_token_count or 0
-                    )
+                    # The SDK has used different attribute names for response
+                    # tokens over time.  Rely on the helper to read whichever
+                    # is present.
+                    self.total_audio_output_tokens += get_response_tokens(last_usage)
             return t_audio_first_chunk, t_audio_play_start
 
         try:

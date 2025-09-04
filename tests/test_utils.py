@@ -4,7 +4,15 @@ import pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 import pytest
 
-from utils import clean_unicode, set_user_env_var, load_embedded_fonts, get_user_env_var
+from utils import (
+    clean_unicode,
+    set_user_env_var,
+    load_embedded_fonts,
+    get_user_env_var,
+    get_response_tokens,
+)
+
+from google.genai.types import UsageMetadata, GenerateContentResponseUsageMetadata
 
 
 def test_clean_unicode_removes_control_chars():
@@ -49,4 +57,16 @@ def test_get_user_env_var_reads_from_env(monkeypatch):
     # When present in the environment it should be returned
     monkeypatch.setenv('TEST_VAR', 'value')
     assert get_user_env_var('TEST_VAR') == 'value'
+
+
+def test_get_response_tokens_handles_legacy_and_new_fields():
+    """Ensure response token extraction works for both SDK variants."""
+
+    modern = UsageMetadata(response_token_count=7)
+    legacy = GenerateContentResponseUsageMetadata(candidates_token_count=9)
+
+    assert get_response_tokens(modern) == 7
+    assert get_response_tokens(legacy) == 9
+    # When no relevant field exists, result should be zero
+    assert get_response_tokens(UsageMetadata()) == 0
 
