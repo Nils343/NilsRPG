@@ -4,7 +4,7 @@
     "output_cost_per_token": 2.5e-6,
     "source": "https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
   },
-  "gemini-2.5-flash-preview-tts": {
+  "gemini-2.5-flash-preview-native-audio-dialog": {
     "input_cost_per_token": 1.5e-7,
     "output_cost_per_token": 6e-7,
     "source": "https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"

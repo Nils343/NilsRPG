@@ -12,7 +12,6 @@ import os.path
 import pickle
 import re
 import sys
-import queue
 import threading
 import time
 import uuid
@@ -51,7 +50,7 @@ DEBUG_TTS = os.environ.get("RPG_DEBUG_TTS") == "1"
 # These constants declare which Gemini model powers each content stream.
 MODEL = "gemini-2.5-flash"  # Primary text model powering narrative responses.
 #AUDIO_MODEL = "gemini-2.5-pro-preview-tts"
-AUDIO_MODEL = "gemini-live-2.5-flash-preview"  # Live TTS model for narration.
+AUDIO_MODEL = "gemini-2.5-flash-preview-native-audio-dialog"  # Native audio dialog model for narration.
 AUDIO_VOICE = "Algenib"  # Default voice used for narration.
 #IMAGE_MODEL = "imagen-4.0-generate-001"  # Baseline image generation model.
 #IMAGE_MODEL = "imagen-4.0-ultra-generate-001"  # High quality image model.
@@ -206,10 +205,7 @@ class RPGGame:
         self._audio_stream = None
         self._audio_stream_lock = threading.Lock()
 
-        # Sentence-level narration queue
-        self._narration_buffer = ""
-        self._narration_queue = queue.Queue()
-        self._narration_worker_started = False
+        # Narration tracking
         self._debug_t_text_done = None
         self._tts_warmed = False
         self._debug_logged_once = False
@@ -315,9 +311,6 @@ class RPGGame:
 
         # Build UI; defer starting a new game until the menu is used
         self._build_gui()
-
-        # Start background narration worker
-        self._ensure_narration_worker()
 
     def _append_choice_and_blank(self):
         """Insert the last chosen option plus an empty line, before streaming the new situation."""
@@ -838,8 +831,18 @@ class RPGGame:
                         # clear buf so we don't reprocess these chars
                         buf = ""
     
-                # 4) After the loop completes, flush any remaining narration and parse the full JSON
-                self.root.after(0, self._flush_narration_buffer)
+                # 4) After the loop completes, parse the full JSON and speak the narration
+                if DEBUG_TTS and self._debug_t_text_done is None and not self._debug_logged_once:
+                    self._debug_t_text_done = time.time()
+                if SOUND_ENABLED:
+                    self.root.after(
+                        0,
+                        lambda: threading.Thread(
+                            target=self._speak_situation,
+                            args=(self._current_situation_streamed,),
+                            daemon=True,
+                        ).start(),
+                    )
                 gr = GameResponse.model_validate_json(json_output)
                 data = gr.model_dump()           # all fields as a dictionary
                 cleaned = clean_unicode(data)           # recursively filter all strings
@@ -1052,17 +1055,6 @@ class RPGGame:
        # otherwise let other handlers run
 
     # --- Read the just-streamed situation out loud (Gemini TTS) ---
-    def _ensure_narration_worker(self):
-        if not self._narration_worker_started:
-            threading.Thread(target=self._narration_worker, daemon=True).start()
-            self._narration_worker_started = True
-
-    def _narration_worker(self):
-        while True:
-            segment = self._narration_queue.get()
-            self._speak_situation(segment)
-            self._narration_queue.task_done()
-
     def _stop_audio(self):
         """Stop any currently playing audio stream."""
         with self._audio_stream_lock:
@@ -1075,15 +1067,8 @@ class RPGGame:
                 self._audio_stream = None
 
     def _clear_narration(self):
-        """Stop audio and empty any queued narration segments."""
+        """Stop audio and reset narration debug state."""
         self._stop_audio()
-        while not self._narration_queue.empty():
-            try:
-                self._narration_queue.get_nowait()
-                self._narration_queue.task_done()
-            except queue.Empty:
-                break
-        self._narration_buffer = ""
         self._debug_t_text_done = None
         self._debug_logged_once = False
 
@@ -1438,26 +1423,6 @@ class RPGGame:
         self.situation_text.config(state='disabled')
         # Also keep a full copy so TTS can read it verbatim once complete.
         self._current_situation_streamed += text
-        self._narration_buffer += text
-        while True:
-            m = re.search(r'[.!?]', self._narration_buffer)
-            if not m:
-                break
-            end = m.end()
-            sentence = self._narration_buffer[:end]
-            self._narration_buffer = self._narration_buffer[end:]
-            if DEBUG_TTS and self._debug_t_text_done is None and not self._debug_logged_once:
-                self._debug_t_text_done = time.time()
-            if SOUND_ENABLED:
-                self._narration_queue.put(sentence)
-
-    def _flush_narration_buffer(self):
-        if self._narration_buffer.strip():
-            if DEBUG_TTS and self._debug_t_text_done is None and not self._debug_logged_once:
-                self._debug_t_text_done = time.time()
-            if SOUND_ENABLED:
-                self._narration_queue.put(self._narration_buffer)
-        self._narration_buffer = ""
 
     def _open_menu(self):
         """Display the main menu overlay with available actions."""
