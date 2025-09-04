@@ -14,4 +14,5 @@ python NilsRPG.py
 
 The application will automatically read your `GEMINI_API_KEY` from the Windows
 user environment, even when running inside a virtual environment. You can also
-configure or update the key from the in‑game **API** menu.
+configure or update the key from the in‑game **API** menu, which also lets you
+set the text model's thinking budget (0‑4096) for deeper reasoning.
