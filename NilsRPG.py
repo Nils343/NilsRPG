@@ -33,7 +33,12 @@ except ImportError:  # pragma: no cover - non-Windows
     winsound = None
 
 from models import Attributes, Environment, GameResponse, InventoryItem, PerkSkill
-from utils import clean_unicode, load_embedded_fonts, set_user_env_var
+from utils import (
+    clean_unicode,
+    load_embedded_fonts,
+    set_user_env_var,
+    get_user_env_var,
+)
 
 IMAGE_GENERATION_ENABLED = False
 SOUND_ENABLED = True
@@ -126,11 +131,16 @@ _STYLES, _DIFFICULTIES = _parse_world()
 world_text = ""
 
 # --- Gemini client setup ---
-api_key = os.environ.get("GEMINI_API_KEY")
+# Prefer an existing environment variable but fall back to the user's global
+# Windows environment settings (useful when running from a virtual
+# environment).
+api_key = os.environ.get("GEMINI_API_KEY") or get_user_env_var("GEMINI_API_KEY")
 if api_key:
+    # ensure downstream code can always rely on os.environ
+    os.environ["GEMINI_API_KEY"] = api_key
     client = genai.Client(api_key=api_key)
 else:
-    client=None
+    client = None
 
 # --- Main RPG application ---
 class RPGGame:

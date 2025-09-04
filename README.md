@@ -10,3 +10,8 @@ py -m venv .venv
 pip install -r requirements.txt
 $env:GEMINI_API_KEY="your_key_here"
 python NilsRPG.py
+```
+
+The application will automatically read your `GEMINI_API_KEY` from the Windows
+user environment, even when running inside a virtual environment. You can also
+configure or update the key from the in‑game **API** menu.
