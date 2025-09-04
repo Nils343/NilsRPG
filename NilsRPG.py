@@ -60,16 +60,17 @@ def set_user_env_var(name: str, value: str):
     )
 
 def _clean(obj):
-    # 1. Strings: entferne alle Unicode-Control-Chars (Kategorie C*), erhalte Umlaute
+    """Recursively remove Unicode control characters from mappings and sequences."""
+    # 1. Strings: remove all Unicode control characters (category C*) but keep umlauts
     if isinstance(obj, str):
         return ''.join(ch for ch in obj if unicodedata.category(ch)[0] != 'C')
-    # 2. Dicts: wende Reinigung rekursiv auf Werte an
+    # 2. Dicts: apply cleaning recursively to all values
     if isinstance(obj, Mapping):
         return {k: _clean(v) for k, v in obj.items()}
-    # 3. Listen/Tuples: wende Reinigung auf jedes Element an
+    # 3. Lists/Tuples: clean every element
     if isinstance(obj, Sequence) and not isinstance(obj, str):
         return type(obj)(_clean(v) for v in obj)
-    # 4. Andere Typen (Numbers, None, etc.): belasse unverändert
+    # 4. Other types (numbers, None, etc.): leave unchanged
     return obj
 
 # --- Attribute explanations ---
@@ -207,6 +208,7 @@ else:
 
 # --- Main RPG application ---
 class RPGGame:
+    """Tkinter-based RPG application powered by Google's Gemini models."""
     def __init__(self, root: tk.Tk):
         # unique ID for this character (initialized on first identity choice)
         self.character_id = None
@@ -709,8 +711,8 @@ class RPGGame:
                 prompt+="\nUse up to three words to describe the attributes and the environment."
                 prompt+="\nAddress the player in the first person only.\n"
             
-#            prompt+="\n If the player wants to do something ridiculous or stupid, ask whether they are serious once. If already asked last turn and the player insists, follow his wish.\n"
-#            prompt+="Antworte ausschließlich Deutsch."
+#            prompt += "\n If the player wants to do something ridiculous or stupid, ask whether they are serious once. If already asked last turn and the player insists, follow their wish.\n"
+#            prompt += "Respond exclusively in German."
 
             # Disable inputs
             self.root.after(0, self._set_options_enabled, False)
@@ -833,9 +835,9 @@ class RPGGame:
 
             # 4) After the loop completes, parse the full JSON
             gr = GameResponse.model_validate_json(json_output)
-            data = gr.model_dump()           # alle Felder als Dict
-            cleaned = _clean(data)           # rekursives Filtern aller Strings
-            gr = GameResponse.model_validate(cleaned)  # zurück in GameResponse
+            data = gr.model_dump()           # all fields as a dictionary
+            cleaned = _clean(data)           # recursively filter all strings
+            gr = GameResponse.model_validate(cleaned)  # convert back into GameResponse
         
             print("\n=========================\n")
             print(gr)
