@@ -8,6 +8,8 @@ from utils import clean_unicode, set_user_env_var, load_embedded_fonts
 
 
 def test_clean_unicode_removes_control_chars():
+    """Verify control characters are stripped from nested collections."""
+
     data = {
         'text': 'Hello\x00World',
         'list': ['A\x01', 'B'],
@@ -23,12 +25,16 @@ def test_clean_unicode_removes_control_chars():
 
 @pytest.mark.skipif(sys.platform.startswith('win'), reason='Windows-specific functionality')
 def test_set_user_env_var_raises_on_non_windows():
+    """set_user_env_var should raise on unsupported platforms."""
+
     with pytest.raises(OSError):
         set_user_env_var('TEST_VAR', 'value')
 
 
 @pytest.mark.skipif(sys.platform.startswith('win'), reason='Windows-specific functionality')
 def test_load_embedded_fonts_noop_on_non_windows():
+    """load_embedded_fonts should exit quietly on non-Windows systems."""
+
     # Should simply return without raising on non-Windows systems
     assert load_embedded_fonts() is None
 

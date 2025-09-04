@@ -16,7 +16,11 @@ else:  # pragma: no cover - platform specific
 
 
 def set_user_env_var(name: str, value: str) -> None:
-    """Write a user-level environment variable on Windows."""
+    """Write a user-level environment variable on Windows.
+
+    This uses the Windows registry and broadcasts an update message so that
+    new processes inherit the variable immediately.
+    """
     if not sys.platform.startswith("win") or winreg is None:  # pragma: no cover
         raise OSError("set_user_env_var is only supported on Windows")
     reg_key = winreg.OpenKey(
@@ -40,7 +44,7 @@ def set_user_env_var(name: str, value: str) -> None:
 
 
 def clean_unicode(obj):
-    """Recursively remove Unicode control characters from mappings and sequences."""
+    """Recursively strip Unicode control characters from nested structures."""
     if isinstance(obj, str):
         return "".join(ch for ch in obj if unicodedata.category(ch)[0] != "C")
     if isinstance(obj, Mapping):
@@ -51,7 +55,11 @@ def clean_unicode(obj):
 
 
 def load_embedded_fonts() -> None:
-    """Register fonts embedded in the assets package."""
+    """Register fonts embedded in the assets package.
+
+    On Windows the fonts are written to a temporary directory and registered
+    with the system for the duration of the process.
+    """
     if not sys.platform.startswith("win") or ctypes is None:  # pragma: no cover
         return
     ctypes.windll.shcore.SetProcessDpiAwareness(2)

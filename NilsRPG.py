@@ -1,3 +1,10 @@
+"""Main application module for Nils' RPG.
+
+This script stitches together the Tkinter front end with Google Gemini
+services to generate narrative text, images and speech for a dynamic
+role‑playing experience.
+"""
+
 import glob
 import json
 import os
@@ -28,14 +35,21 @@ from models import Attributes, Environment, GameResponse, InventoryItem, PerkSki
 from utils import clean_unicode, load_embedded_fonts, set_user_env_var
 
 IMAGE_GENERATION_ENABLED = False
-MODEL = "gemini-2.5-flash"  # text model
+
+# --- Model configuration -------------------------------------------------
+# These constants declare which Gemini model powers each content stream.
+MODEL = "gemini-2.5-flash"  # Primary text model powering narrative responses.
 #AUDIO_MODEL = "gemini-2.5-pro-preview-tts"
-AUDIO_MODEL = "gemini-2.5-flash-preview-tts"
-#IMAGE_MODEL = "imagen-4.0-generate-001"  # image model
-#IMAGE_MODEL = "imagen-4.0-ultra-generate-001" # image model
-IMAGE_MODEL = "imagen-4.0-fast-generate-001" # image model
+AUDIO_MODEL = (
+    "gemini-2.5-flash-preview-tts"
+)  # Text-to-speech model for converting narration to audio.
+#IMAGE_MODEL = "imagen-4.0-generate-001"  # Baseline image generation model.
+#IMAGE_MODEL = "imagen-4.0-ultra-generate-001"  # High quality image model.
+IMAGE_MODEL = "imagen-4.0-fast-generate-001"  # Fast default image model.
 
 # --- Attribute explanations ---
+# These explanations supply tooltip text for the GUI and provide players with
+# context about what each attribute represents within the game.
 ATTRIBUTE_EXPLANATIONS = {
     "Name": "The character's chosen or given name; used for narrative reference and identification.",
     "Background": "A concise summary of upbringing, training, or profession that anchors starting skills and worldview.",
@@ -45,7 +59,7 @@ ATTRIBUTE_EXPLANATIONS = {
     "Hunger": "Level of nourishment; starvation steadily degrades Stamina, Health and Sanity until food is consumed.",
     "Thirst": "Level of hydration; dehydration progressively impairs Stamina, Health, and Sanity until water is consumed.",
     "Stamina": "Reserve of physical energy for actions such as running or fighting; exhaustion lowers overall Health.",
-    "Light": "Amount of illumination available; deep darkness erodes Sanity, while steady light can restore it.",
+    "Light": "Current illumination level; deep darkness erodes Sanity, while a steady light can restore it.",
     "Location": "Immediate geographical setting—village, wilderness, or landmark—providing environmental context and local influences.",
     "Daytime": "Current phase of the day (dawn, day, dusk, or night); governs ambient light, activity cycles, and potential encounters.",
     "Temperature": "Perceived ambient heat or cold; extremes burn or freeze the body, harming Health and Stamina.",
@@ -54,10 +68,13 @@ ATTRIBUTE_EXPLANATIONS = {
     "Soundscape": "Ambient sounds from nature or activity; shapes awareness, mood, and stealth dynamics."
 }
 
-# Load embedded fonts once on startup
+# Load embedded fonts once on startup to ensure consistent presentation across
+# platforms.
 load_embedded_fonts()
 
-# ——— Parse STYLE & DIFFICULTY sections from world.txt ———
+# --- Parse STYLE & DIFFICULTY sections from world.txt ---
+# Reads the optional world configuration file and returns dictionaries of the
+# available styles and difficulty modes.
 def _parse_world():
     """Return two dicts: {style_title: full_section}, {difficulty_title: full_section}."""
     styles, diffs = {}, {}
@@ -107,6 +124,7 @@ else:
 class RPGGame:
     """Tkinter-based RPG application powered by Google's Gemini models."""
     def __init__(self, root: tk.Tk):
+        """Configure widgets, fonts and initial game state."""
         # unique ID for this character (initialized on first identity choice)
         self.character_id = None
 
@@ -252,6 +270,7 @@ class RPGGame:
         custom_entry = ttk.Entry(win)
 
         def on_submit():
+            """Commit the chosen identity and start the game."""
             # 1) grab the choice
             choice = custom_entry.get().strip() or identity_var.get()
             if not choice:
@@ -269,6 +288,7 @@ class RPGGame:
         submit_btn = ttk.Button(win, text="Submit", command=on_submit, style="RPG.TButton")
 
         def populate_options(options: list[str]):
+            """Fill the dialog with preset identity options."""
             ttk.Label(win, text="Who are you?", anchor="center").pack(
                 fill=tk.X,
                 padx=20,
@@ -316,13 +336,15 @@ class RPGGame:
 
         # Allow ESC to cancel identity selection: release grab, destroy dialog, reopen menu
         def _on_escape(event=None):
+            """Cancel identity selection and return to the menu."""
             win.grab_release()
             win.destroy()
             self._open_menu()
         win.bind("<Escape>", _on_escape)
 
     def _build_gui(self):
-        self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)        
+        """Assemble all widgets composing the main game interface."""
+        self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         self.main_pane.pack(fill=tk.BOTH, expand=True)
 
         self.left_pane = ttk.PanedWindow(self.main_pane, orient=tk.VERTICAL)
@@ -490,6 +512,7 @@ class RPGGame:
         self.progress.pack(fill=tk.X, padx=2, pady=(0,4))
 
     def _start_game(self):
+        """Begin a new game session after validating the API key."""
         # Ensure a Developer API key is set before starting
         if not os.environ.get("GEMINI_API_KEY", "").strip():
             messagebox.showwarning(
@@ -511,6 +534,7 @@ class RPGGame:
         self._call_api(option_text="", initial=True)
 
     def _on_submit(self):
+        """Handle user submission of a chosen or custom option."""
         # cancel any in‐flight image generation
         self._image_generation_cancel.set()
 
@@ -536,9 +560,11 @@ class RPGGame:
         self._call_api(choice)
 
     def _call_api(self, option_text: str, initial: bool=False):
+        """Send the player's choice to Gemini and stream the response."""
         def thread_target():
+            """Worker thread that performs the streaming API call."""
             # Collect the streamed situation text for TTS.
-            self._current_situation_streamed = ""            
+            self._current_situation_streamed = ""
 
             # advance our local turn counter (initial remains turn 1)
             if not initial:
@@ -773,6 +799,7 @@ class RPGGame:
         self.progress.config(maximum=steps, value=0)
         delay_ms = 10
         def tick():
+            """Increment the progress bar until the API response arrives."""
             if self.progress["value"] < steps:
                 self.progress["value"] += 1
                 self.root.after(delay_ms, tick)
@@ -781,10 +808,12 @@ class RPGGame:
         threading.Thread(target=thread_target, daemon=True).start()
 
     def _finish_api(self):
+        """Hide progress indicators once the text API call completes."""
         self.progress.pack_forget()
         self.progress_label.pack_forget()
 
     def _update_remaining_state(self, gr: GameResponse):
+        """Refresh UI elements based on the latest `GameResponse`."""
         old_attributes = self.attributes.copy()
         # on very first update, old_attributes is empty → skip all “new/changed” highlighting
         is_initial = not bool(old_attributes)
@@ -997,6 +1026,7 @@ class RPGGame:
             self.root.focus_set()       
 
     def _resize_scene_image(self, event):
+        """Scale the scene artwork to fit the current label size."""
         orig = self._orig_scene_img
         orig_w, orig_h = orig.size
         scale = min(event.width/orig_w, event.height/orig_h)
@@ -1039,6 +1069,7 @@ class RPGGame:
         self._perk_win = win
         # Close window on any click elsewhere
         def _close_perk_win(event):
+            """Dismiss the perk description window on external clicks."""
             if self._perk_win:
                 self._perk_win.destroy()
                 self._perk_win = None
@@ -1049,6 +1080,7 @@ class RPGGame:
         self._perk_click_binding = self.root.bind("<Button-1>", _close_perk_win) 
 
     def _on_item_select(self, event):
+        """Display a temporary window describing the selected item."""
         sel = event.widget.curselection()
         if not sel:
             return
@@ -1080,6 +1112,7 @@ class RPGGame:
         self._item_win = win
         # Close on any click elsewhere
         def _close_item_win(event):
+            """Dismiss the item description window on external clicks."""
             if self._item_win:
                 self._item_win.destroy()
                 self._item_win = None
@@ -1089,6 +1122,7 @@ class RPGGame:
         self._item_click_binding = self.root.bind("<Button-1>", _close_item_win)              
 
     def _start_image_generation(self, prompt_text: str):
+        """Kick off asynchronous image generation for the current scene."""
         # show image generation progress in thinking pane
         steps = max(1, int(self.last_image_duration * 100))
         self.progress_label.config(text="Generating image…")
@@ -1102,13 +1136,15 @@ class RPGGame:
 
         delay_ms = 10
         def tick():
+            """Animate the progress bar while waiting for an image."""
             if self.progress["value"] < steps and not self._image_generation_cancel.is_set():
                 self.progress["value"] += 1
                 self.root.after(delay_ms, tick)
         tick()
 
         def thread_target():
-            start = time.time()            
+            """Background worker that requests an image from Gemini."""
+            start = time.time()
             response = client.models.generate_images(
                 model=IMAGE_MODEL,
                 prompt=prompt_text,
@@ -1163,6 +1199,7 @@ class RPGGame:
         threading.Thread(target=thread_target, daemon=True).start()
 
     def _finish_image_generation(self, image: Image.Image):
+        """Update the scene with a newly generated image."""
         # hide thinking pane progress
         self.progress.pack_forget()
         self.progress_label.pack_forget()
@@ -1182,11 +1219,13 @@ class RPGGame:
         self._create_text_tooltip(self.scene_label, prompt_text, wraplength=800)
 
     def _select_option_and_submit(self, idx: int):
+        """Helper used by numeric shortcuts to choose an option."""
         self.selected_option.set(idx)
         self.root.update_idletasks()
         self._on_submit()
 
     def _on_number_key(self, event, num):
+        """Bind number keys so they select corresponding options."""
         # suppress if typing in custom option box
         if self.root.focus_get() == self.custom_entry:
             return "break"
@@ -1200,6 +1239,7 @@ class RPGGame:
         """Show a simple tooltip with the given text (e.g. item or perk description)."""
         # allow custom wraplength (px) for wider tooltips
         def on_enter(event):
+            """Create and display the tooltip window."""
             tw = tk.Toplevel(self.root)
             tw.overrideredirect(True)
             lbl = ttk.Label(
@@ -1217,6 +1257,7 @@ class RPGGame:
             widget._tooltip = tw
 
         def on_leave(event):
+            """Destroy the tooltip window when the cursor exits."""
             tw = getattr(widget, "_tooltip", None)
             if tw:
                 tw.destroy()
@@ -1226,7 +1267,7 @@ class RPGGame:
         widget.bind("<Leave>", on_leave)    
 
     def _stream_situation(self, text: str):
-        """Append streamed text to the Situation pane."""
+        """Append streamed text to the story pane and buffer for TTS."""
         self.situation_text.config(state='normal')
         self.situation_text.insert(tk.END, text)
         self.situation_text.see(tk.END)
@@ -1235,7 +1276,7 @@ class RPGGame:
         self._current_situation_streamed += text                
 
     def _open_menu(self):
-        """Display a modal menu pane in the center of the screen."""
+        """Display the main menu overlay with available actions."""
         # Do not open a second menu if one is already shown
         if hasattr(self, 'menu_win') and self.menu_win.winfo_exists():
             return
@@ -1440,10 +1481,11 @@ class RPGGame:
             self.root.bind(str(n), lambda e, num=n: self._on_number_key(e, num))
 
     def run(self):
+        """Enter the Tkinter main event loop."""
         self.root.mainloop()
 
     def _save_game(self):
-        """Save current game state."""
+        """Serialize the current game state to the user's save directory."""
         # if no character has been chosen/loaded yet, skip saving
         if self.character_id is None:
             return        
@@ -1641,6 +1683,7 @@ class RPGGame:
 
             # click anywhere in this row to load
             def make_cb(p=path):
+                """Return a click handler that loads the given save file."""
                 return lambda e=None: (win.destroy(), self._load_game_from_path(p))
             for w in (row, thumb, lbl):
                 w.bind("<Button-1>", make_cb())
@@ -1757,7 +1800,7 @@ class RPGGame:
                 messagebox.showerror("Delete Save", f"Could not delete save:\n{e}")     
 
     def _handle_global_escape(self, event=None):
-        """Global ESC handler: close load-game, prevent duplicate menus, or open menu."""
+        """Handle ESC presses by closing popups or toggling the menu."""
         # 1. If load-game window is open, close it
         if hasattr(self, 'load_win') and self.load_win.winfo_exists():
             self.load_win.destroy()
@@ -1770,7 +1813,7 @@ class RPGGame:
             self._open_menu()
 
     def _open_API(self):
-        """Modal to configure GEMINI_API_KEY, IMAGE_GENERATION_ENABLED, and MODEL."""
+        """Open a modal dialog for API key and model configuration."""
         win = tk.Toplevel(self.root)
         win.title("API Configuration")
         # Make this dialog modal and transient, then raise it
@@ -1803,6 +1846,7 @@ class RPGGame:
         btns.pack(fill=tk.X, side=tk.BOTTOM)
 
         def _save():
+            """Persist settings after validating the API key."""
             key = api_key_var.get().strip()
 
             # 1. Instantiate a temporary client and validate the key before saving
@@ -1844,7 +1888,7 @@ class RPGGame:
         
     # ——— New methods for API‑key validation on menu actions ———
     def _validate_api_key(self):
-        """Ensure GEMINI_API_KEY is set and valid."""
+        """Check that GEMINI_API_KEY exists and authorizes requests."""
         key = os.environ.get("GEMINI_API_KEY", "").strip()
         if not key:
             messagebox.showwarning(
@@ -1894,7 +1938,7 @@ class RPGGame:
             self._finish_image_generation(placeholder)
 
     def _ask_style(self):
-        """Prompt for world style selection."""
+        """Prompt the player to choose a narrative style."""
         win = tk.Toplevel(self.root)
         win.transient(self.root); win.grab_set(); win.lift()
         win.title("Choose World Style")
@@ -1917,12 +1961,13 @@ class RPGGame:
         win.geometry(f"{w}x{h}+{x}+{y}")        
 
     def _on_style_selected(self, win, choice):
+        """Store the style selection and proceed to difficulty choices."""
         self.style_choice = choice
         win.grab_release(); win.destroy()
         self._ask_difficulty()
 
     def _ask_difficulty(self):
-        """Prompt for difficulty selection."""
+        """Prompt the player to choose a difficulty level."""
         win = tk.Toplevel(self.root)
         win.transient(self.root); win.grab_set(); win.lift()
         win.title("Choose Difficulty")
@@ -1945,6 +1990,7 @@ class RPGGame:
         win.geometry(f"{w}x{h}+{x}+{y}")        
 
     def _on_difficulty_selected(self, win, choice):
+        """Finalize difficulty, rebuild world text and ask for identity."""
         self.diff_choice = choice
         # build the world_text used by _call_api()
         global world_text
@@ -1954,7 +2000,7 @@ class RPGGame:
             _DIFFICULTIES.get(self.diff_choice, "")
         )
         win.grab_release(); win.destroy()
-        self._ask_identity()            
+        self._ask_identity()
  
 if __name__ == "__main__":
     root = tk.Tk()
