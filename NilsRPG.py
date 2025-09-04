@@ -883,7 +883,10 @@ class RPGGame:
             except Exception as e:
                 self.root.after(0, self._finish_api)
                 self.root.after(0, self._set_options_enabled, True)
-                self.root.after(0, lambda: messagebox.showerror("API Error", str(e)))
+                # "e" goes out of scope once the except block ends, so capture
+                # the error message now and pass it directly to "after" to
+                # avoid a NameError in the scheduled callback.
+                self.root.after(0, messagebox.showerror, "API Error", str(e))
         # Show thinking progress bar
         self.progress_label.config(text="Thinking…")
         self.progress.config(style="Thinking.Horizontal.TProgressbar")
