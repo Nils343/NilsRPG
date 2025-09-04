@@ -1963,3 +1963,4 @@ if __name__ == "__main__":
     game.run()
 
 # pyinstaller --clean --noconfirm --onefile --windowed --add-data "assets;assets" NilsRPG.py
+

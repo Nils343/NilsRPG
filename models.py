@@ -51,3 +51,4 @@ class GameResponse(BaseModel):
     attributes: Attributes
     options: list[str]
     image_prompt: str
+

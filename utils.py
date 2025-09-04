@@ -66,3 +66,4 @@ def load_embedded_fonts() -> None:
                 with open(path, "wb") as f:
                     f.write(data)
                 ctypes.windll.gdi32.AddFontResourceExW(path, fr_private, 0)
+
