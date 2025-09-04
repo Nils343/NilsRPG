@@ -1123,6 +1123,7 @@ class RPGGame:
                     sd_stream.start()
                     self._audio_stream = sd_stream
                 last_usage = None
+                loop = asyncio.get_running_loop()
                 async for msg in session.receive():
                     if msg.usage_metadata:
                         # The SDK reports cumulative token counts for the stream
@@ -1138,11 +1139,13 @@ class RPGGame:
                         # Writing to the sound device is a blocking call. If this
                         # runs on the event loop thread, the websockets keepalive
                         # pings cannot be processed which eventually triggers a
-                        # timeout ("keepalive ping timeout; no close frame").  Run
+                        # timeout ("keepalive ping timeout; no close frame"). Run
                         # the blocking write in a worker thread so the event loop
                         # stays responsive during long narrations.
-                        audio_chunk = np.frombuffer(data, dtype=np.int16)
-                        await asyncio.to_thread(sd_stream.write, audio_chunk)
+                        arr = np.frombuffer(data, dtype=np.int16)
+                        # Offload the blocking write via the default threadpool so
+                        # asyncio can continue replying to websocket pings.
+                        await loop.run_in_executor(None, sd_stream.write, arr)
                 with self._audio_stream_lock:
                     sd_stream.stop()
                     sd_stream.close()
