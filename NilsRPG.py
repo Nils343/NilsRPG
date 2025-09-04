@@ -46,6 +46,7 @@ from utils import (
 IMAGE_GENERATION_ENABLED = False
 SOUND_ENABLED = True
 DEBUG_TTS = os.environ.get("RPG_DEBUG_TTS") == "1"
+THINKING_BUDGET = 0  # Default thinking budget for text model
 
 # --- Model configuration -------------------------------------------------
 # These constants declare which Gemini model powers each content stream.
@@ -737,7 +738,7 @@ class RPGGame:
                         response_mime_type="application/json",
                         response_schema=GameResponse,
                         thinking_config=types.ThinkingConfig(
-                            thinking_budget=0,          # Turns off thinking
+                            thinking_budget=THINKING_BUDGET,
                             include_thoughts=False      # Explicitly suppresses any thought fragments
                         )
                     ),
@@ -2031,6 +2032,7 @@ class RPGGame:
         image_model_var = tk.StringVar(value=IMAGE_MODEL)
         audio_model_var = tk.StringVar(value=AUDIO_MODEL)
         voice_var       = tk.StringVar(value=AUDIO_VOICE)
+        thinking_budget_var = tk.IntVar(value=THINKING_BUDGET)
 
         frm = ttk.Frame(win, padding=20)
         frm.pack(fill=tk.BOTH, expand=True)
@@ -2058,6 +2060,9 @@ class RPGGame:
 
         ttk.Label(frm, text="Sound Voice:").grid(row=6, column=0, sticky="w", pady=(10,0))
         ttk.Entry(frm, textvariable=voice_var, width=60).grid(row=6, column=2, sticky="w", pady=(10,0))
+
+        ttk.Label(frm, text="Thinking Budget:").grid(row=7, column=0, sticky="w", pady=(10,0))
+        ttk.Spinbox(frm, from_=0, to=4096, textvariable=thinking_budget_var, width=10).grid(row=7, column=2, sticky="w", pady=(10,0))
 
         btns = ttk.Frame(win, padding=(0,0,20,20))
         btns.pack(fill=tk.X, side=tk.BOTTOM)
@@ -2102,6 +2107,9 @@ class RPGGame:
 
             global AUDIO_VOICE
             AUDIO_VOICE = voice_var.get().strip()
+
+            global THINKING_BUDGET
+            THINKING_BUDGET = max(0, min(4096, int(thinking_budget_var.get())))
 
             win.destroy()
 
