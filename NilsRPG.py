@@ -1098,7 +1098,7 @@ class RPGGame:
                         channels=1,
                         dtype="int16",
                         latency="high",
-                        blocksize=2048,
+                        blocksize=512,
                     )
                     sd_stream.start()
                     self._audio_stream = sd_stream
