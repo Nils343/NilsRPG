@@ -7,7 +7,6 @@ role‑playing experience.
 
 import json
 import os
-import os.path
 import base64
 import re
 import sys
