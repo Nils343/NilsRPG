@@ -9,7 +9,7 @@ import glob
 import json
 import os
 import os.path
-import pickle
+import base64
 import re
 import sys
 import threading
@@ -34,7 +34,14 @@ try:
 except Exception:  # pragma: no cover - missing sounddevice
     HAVE_SD = False
 
-from models import Attributes, Environment, GameResponse, InventoryItem, PerkSkill
+from models import (
+    Attributes,
+    Environment,
+    GameResponse,
+    InventoryItem,
+    PerkSkill,
+    SaveGame,
+)
 from utils import (
     clean_unicode,
     load_embedded_fonts,
@@ -1688,71 +1695,73 @@ class RPGGame:
 
     def _save_game(self):
         """Serialize the current game state to the user's save directory."""
-        # if no character has been chosen/loaded yet, skip saving
         if self.character_id is None:
-            return        
-        data = {
-            'identity':             self.identity,
-            'style':                self.style_choice,
-            'difficulty':           self.diff_choice,            
-            'turn':                 self.turn,
-            'day':                  self.day,
-            'time':                 self.time,
-            'current_situation':    self.current_situation,
-            'environment':          self.environment,
-            'attributes':           self.attributes,
-            'inventory':            [i.model_dump() for i in self.inventory],
-            'perks_skills':         [p.model_dump() for p in self.perks_skills],
-            'options':              self.options,
-            'past_situations':      self.past_situations,
-            'past_options':         self.past_options,
-            'past_days':            self.past_days,
-            'past_times':           self.past_times,
-            'previous_image_prompt':self.previous_image_prompt,
-        }
-        # 1. Determine per-user save directory on Windows
+            return
+
+        # Determine save directory and path
         save_dir = os.path.join(
             os.getenv("APPDATA", os.path.expanduser("~")),
-            "Nils' RPG"
+            "Nils' RPG",
         )
         os.makedirs(save_dir, exist_ok=True)
+        path = os.path.join(save_dir, f"{self.character_id}.json")
 
-        # 2. Single save per character: overwrite <character_id>.dat
-        filename = f"{self.character_id}.dat"
-        path = os.path.join(save_dir, filename)
-        # record the character_id in the save data
-        data['character_id'] = self.character_id
-
-        # record current pane sizes (sash positions)
+        # Capture pane geometry
+        pane_sizes = None
         try:
             pane_sizes = {
-                'main_sash':      self.main_pane.sashpos(0),
-                'left_sashes':   [
+                "main_sash": self.main_pane.sashpos(0),
+                "left_sashes": [
                     self.left_pane.sashpos(i)
                     for i in range(len(self.left_pane.panes()) - 1)
                 ],
-                'right_sashes':  [
+                "right_sashes": [
                     self.right_pane.sashpos(i)
                     for i in range(len(self.right_pane.panes()) - 1)
                 ],
             }
-            data['pane_sizes'] = pane_sizes
         except Exception:
             pass
 
-        # 3. Serialize the current scene image into bytes
+        # Encode scene image and collect story text
+        scene_b64 = None
+        story_text = None
         try:
             buf = BytesIO()
             self._orig_scene_img.save(buf, format="PNG")
-            data['scene_image_bytes'] = buf.getvalue()
-            # 4. Serialize the full story/history text
-            data['story_text'] = self.situation_text.get('1.0', tk.END)            
+            scene_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            story_text = self.situation_text.get("1.0", tk.END)
+        except Exception:
+            pass
 
-            # 5. Write the pickle and report success
-            with open(path, 'wb') as f:
-                pickle.dump(data, f)
+        save = SaveGame(
+            identity=self.identity,
+            style=self.style_choice,
+            difficulty=self.diff_choice,
+            turn=self.turn,
+            day=self.day,
+            time=self.time,
+            current_situation=self.current_situation,
+            environment=self.environment,
+            attributes=self.attributes,
+            inventory=self.inventory,
+            perks_skills=self.perks_skills,
+            options=self.options,
+            past_situations=self.past_situations,
+            past_options=self.past_options,
+            past_days=self.past_days,
+            past_times=self.past_times,
+            previous_image_prompt=self.previous_image_prompt,
+            character_id=self.character_id,
+            pane_sizes=pane_sizes,
+            story_text=story_text,
+            scene_image_b64=scene_b64,
+        )
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(save.model_dump_json())
         except Exception as e:
-            # 6. On failure, report error
             messagebox.showerror("Save Game", f"Could not save game:\n{e}")
 
     def _load_game(self):
@@ -1769,7 +1778,7 @@ class RPGGame:
             "Nils' RPG"
         )
         os.makedirs(save_dir, exist_ok=True)
-        files = glob.glob(os.path.join(save_dir, "*.dat"))
+        files = glob.glob(os.path.join(save_dir, "*.json"))
         if not files:
             messagebox.showinfo("Load Game", "No save files found.")
             return
@@ -1818,29 +1827,29 @@ class RPGGame:
 
         for path in files:
             try:
-                with open(path, 'rb') as f:
-                    data = pickle.load(f)
+                with open(path, "r", encoding="utf-8") as f:
+                    data = SaveGame.model_validate_json(f.read())
             except Exception:
                 continue
 
             # extract metadata
-            attrs     = data.get('attributes', {})
-            char_name = attrs.get('Name', 'Unknown')
-            loc       = data.get('environment', {}).get('Location', 'Unknown')
-            turn      = data.get('turn', 0)
+            attrs = data.attributes
+            char_name = attrs.Name
+            loc = data.environment.Location
+            turn = data.turn
             mtime     = time.localtime(os.path.getmtime(path))
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", mtime)
 
             # build a larger, 16:9 thumbnail
-            img_bytes = data.get('scene_image_bytes')
-            if img_bytes:
-                img = Image.open(BytesIO(img_bytes))
+            img_b64 = data.scene_image_b64
+            if img_b64:
+                img = Image.open(BytesIO(base64.b64decode(img_b64)))
                 img.thumbnail((160, 90), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(img)
             else:
                 # placeholder thumbnail from embedded assets
-                data = pkg_resources.read_binary("assets", "default.png")
-                placeholder = Image.open(BytesIO(data))
+                placeholder_bytes = pkg_resources.read_binary("assets", "default.png")
+                placeholder = Image.open(BytesIO(placeholder_bytes))
                 placeholder.thumbnail((160, 90), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(placeholder)
 
@@ -1899,98 +1908,89 @@ class RPGGame:
         win.geometry(f"{w}x{h}+{x}+{y}")
 
     def _load_game_from_path(self, path):
-        """Load game state from the user’s chosen save file."""
+        """Load game state from the user's chosen save file."""
         try:
-            with open(path, 'rb') as f:
-                data = pickle.load(f)
+            with open(path, "r", encoding="utf-8") as f:
+                data = SaveGame.model_validate_json(f.read())
         except Exception as e:
             messagebox.showerror("Load Game", f"Could not load save:\n{e}")
             return
         
-        # restore saved style & difficulty, and rebuild prompt context
-        self.style_choice = data.get('style')
-        self.diff_choice  = data.get('difficulty')
+
+        self.style_choice = data.style
+        self.diff_choice = data.difficulty
         global world_text
         world_text = (
-            _STYLES.get(self.style_choice, "") +
-            "\n" +
-            _DIFFICULTIES.get(self.diff_choice, "")
+            _STYLES.get(self.style_choice, "")
+            + "\\n"
+            + _DIFFICULTIES.get(self.diff_choice, "")
         )
 
-        # same logic as before, but now parameterized
-        # reset UI/state
         self._reset_game()
-        # suppress auto-save while we restore everything
 
         self._loading = True
-        self.character_id          = data.get('character_id')
-        self.identity              = data.get('identity')
-        self.turn                  = data.get('turn', 1)
-        self.past_situations       = data.get('past_situations', [])
-        self.past_options          = data.get('past_options', [])
-        self.past_days             = data.get('past_days', [])
-        self.past_times            = data.get('past_times', [])
-        self.previous_image_prompt = data.get('previous_image_prompt')
+        self.character_id = data.character_id
+        self.identity = data.identity
+        self.turn = data.turn
+        self.past_situations = data.past_situations or []
+        self.past_options = data.past_options or []
+        self.past_days = data.past_days or []
+        self.past_times = data.past_times or []
+        self.previous_image_prompt = data.previous_image_prompt
 
         gr = GameResponse(
-            day=data.get('day', 0),
-            time=data.get('time', ""),
-            current_situation=data.get('current_situation', ""),
-            environment=Environment(**data.get('environment', {})),
-            inventory=[InventoryItem(**i) for i in data.get('inventory', [])],
-            perks_skills=[PerkSkill(**p) for p in data.get('perks_skills', [])],
-            attributes=Attributes(**data.get('attributes', {})),
-            options=data.get('options', []),
-            image_prompt=self.previous_image_prompt or ""
+            day=data.day,
+            time=data.time,
+            current_situation=data.current_situation,
+            environment=data.environment,
+            inventory=data.inventory,
+            perks_skills=data.perks_skills,
+            attributes=data.attributes,
+            options=data.options,
+            image_prompt=self.previous_image_prompt or "",
         )
         self._update_remaining_state(gr)
-        # done loading, re-enable auto-save
         self._loading = False
 
-        # restore story text
-        saved = data.get('story_text')
-        self.situation_text.config(state='normal')
-        self.situation_text.delete('1.0', tk.END)
-        self.situation_text.insert('1.0', saved or gr.current_situation)
-        self.situation_text.config(state='disabled')
+        saved = data.story_text
+        self.situation_text.config(state="normal")
+        self.situation_text.delete("1.0", tk.END)
+        self.situation_text.insert("1.0", saved or gr.current_situation)
+        self.situation_text.config(state="disabled")
 
-        # restore exact scene image
-        img_bytes = data.get('scene_image_bytes')
-        if img_bytes:
+        if data.scene_image_b64:
             try:
-                img = Image.open(BytesIO(img_bytes))
+                img = Image.open(BytesIO(base64.b64decode(data.scene_image_b64)))
                 self._orig_scene_img = img
             except Exception:
                 self._orig_scene_img = Image.open("default.png")
             evt = type("E", (), {
-                "width":  self.scene_frame.winfo_width(),
-                "height": self.scene_frame.winfo_height()
+                "width": self.scene_frame.winfo_width(),
+                "height": self.scene_frame.winfo_height(),
             })
             self._resize_scene_image(evt)
 
-            # — Attach tooltip on load to show the saved image prompt —
             self.scene_label.unbind("<Enter>")
             self.scene_label.unbind("<Leave>")
-            tooltip_text = data.get('previous_image_prompt', "") or ""
+            tooltip_text = data.previous_image_prompt or ""
             self._create_text_tooltip(self.scene_label, tooltip_text)
 
-        # restore pane sizes
-        pane_sizes = data.get('pane_sizes', {})
+        pane_sizes = data.pane_sizes
         if pane_sizes:
             try:
-                self.main_pane.sashpos(0, pane_sizes['main_sash'])
+                self.main_pane.sashpos(0, pane_sizes.main_sash)
             except Exception:
                 pass
-            for idx, pos in enumerate(pane_sizes.get('left_sashes', [])):
+            for idx, pos in enumerate(pane_sizes.left_sashes):
                 try:
                     self.left_pane.sashpos(idx, pos)
                 except Exception:
                     pass
-            for idx, pos in enumerate(pane_sizes.get('right_sashes', [])):
+            for idx, pos in enumerate(pane_sizes.right_sashes):
                 try:
                     self.right_pane.sashpos(idx, pos)
                 except Exception:
-                    pass            
+                    pass
 
     def _confirm_delete(self, path, row):
         """Prompt to delete a save file and remove it from the list."""
