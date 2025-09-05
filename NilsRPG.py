@@ -1079,7 +1079,7 @@ class RPGGame:
             # ``AttributeError`` because ``responses`` no longer exists on the
             # async client.  Use ``models.generate_content_stream`` instead to
             # obtain an async iterator of audio chunks.
-            stream = await client.aio.models.generate_content_stream(
+            stream = client.aio.models.generate_content_stream(
                 model=AUDIO_MODEL,
                 contents=[
                     types.Content(
