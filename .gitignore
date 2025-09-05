@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# App data / saves / temp
+*.dat
+*.wav
+generated_images/
+savegames/
+
+# Secrets
+.env
