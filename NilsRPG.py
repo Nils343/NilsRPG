@@ -22,8 +22,8 @@ from tkinter import ttk, messagebox, font as tkfont
 
 import importlib.resources as pkg_resources
 from PIL import Image, ImageTk
-from google import genai
-from google.genai import types, errors
+import genai_api as ga
+from genai_api import types, errors
 from ttkbootstrap import Style
 
 import numpy as np
@@ -47,7 +47,6 @@ from utils import (
     clean_unicode,
     load_embedded_fonts,
     set_user_env_var,
-    get_user_env_var,
     get_response_tokens,
 )
 
@@ -142,45 +141,9 @@ _STYLES, _DIFFICULTIES = _parse_world()
 # Global prompt prefix from chosen style & difficulty
 world_text = ""
 
-# --- Gemini client setup ---
-# Defer client creation; we'll (re)create it when starting the game.
-client = None
-_client_key = None
+# --- Gemini client setup ---------------------------------------------------
+# Client creation and API key resolution now live in :mod:`genai_api`.
 
-
-def _resolve_api_key() -> str:
-    """Return the best available Gemini API key.
-
-    This first checks ``os.environ`` then falls back to the user's global
-    environment via :func:`get_user_env_var`. If a key is found it is written
-    back into ``os.environ`` so downstream code can rely on it.
-    """
-    key = (
-        os.environ.get("GEMINI_API_KEY")
-        or get_user_env_var("GEMINI_API_KEY")
-        or ""
-    ).strip()
-    if key:
-        os.environ["GEMINI_API_KEY"] = key  # ensure downstream code sees it
-    return key
-
-
-def _ensure_client() -> genai.Client | None:
-    """Return a Gemini client for the current environment key.
-
-    This lazily (re)creates the global ``client`` if the key has been set or
-    changed since the last call.
-    """
-    global client, _client_key
-    key = _resolve_api_key()
-    if not key:
-        client = None
-        _client_key = None
-        return None
-    if client is None or key != _client_key:
-        client = genai.Client(api_key=key)
-        _client_key = key
-    return client
 
 # --- Main RPG application ---
 class RPGGame:
@@ -593,7 +556,7 @@ class RPGGame:
         """Begin a new game session after validating the API key."""
         # Resolve the API key, including the registry fallback. If no key is
         # available, return to the main menu so the user can configure one.
-        key = _resolve_api_key()
+        key = ga.resolve_api_key()
         if not key:
             messagebox.showwarning(
                 "Missing API Key",
@@ -603,9 +566,7 @@ class RPGGame:
             return
 
         # (Re)create the genai client now that we definitely have a key
-        global client, _client_key
-        client = genai.Client(api_key=key)
-        _client_key = key
+        ga.set_client_for_key(ga.genai.Client(api_key=key), key)
 
         # Key present—game is officially starting.
         # Immediately show the default placeholder scene (overwriting who.png).
@@ -732,7 +693,7 @@ class RPGGame:
                 print("\n================\n"+prompt)
     
                 # Streaming API call
-                _ensure_client()
+                client = ga.ensure_client()
                 if client is None:
                     raise RuntimeError("No API client available")
                 if SOUND_ENABLED and not self._tts_warmed:
@@ -1104,6 +1065,9 @@ class RPGGame:
         )
 
         async def _run():
+            client = ga.ensure_client()
+            if client is None:
+                return
             t_audio_first_chunk = None
             t_audio_play_start = None
             async with client.aio.live.connect(
@@ -1333,6 +1297,9 @@ class RPGGame:
         def thread_target():
             """Background worker that requests an image from Gemini."""
             start = time.time()
+            client = ga.ensure_client()
+            if client is None:
+                return
             response = client.models.generate_images(
                 model=IMAGE_MODEL,
                 prompt=prompt_text,
@@ -2016,7 +1983,7 @@ class RPGGame:
 
             # 1. Instantiate a temporary client and validate the key before saving
             try:
-                test_client = genai.Client(api_key=key)
+                test_client = ga.genai.Client(api_key=key)
                 test_client.models.list(config={'page_size': 1})
             except Exception as e:
                 messagebox.showerror(
@@ -2029,9 +1996,7 @@ class RPGGame:
             #    and rebind the global client
             set_user_env_var("GEMINI_API_KEY", key)
             os.environ["GEMINI_API_KEY"] = key
-            global client, _client_key
-            client = test_client
-            _client_key = key
+            ga.set_client_for_key(test_client, key)
 
             global IMAGE_GENERATION_ENABLED
             IMAGE_GENERATION_ENABLED = img_var.get()
@@ -2070,7 +2035,7 @@ class RPGGame:
     # ——— New methods for API‑key validation on menu actions ———
     def _validate_api_key(self):
         """Check that GEMINI_API_KEY exists and authorizes requests."""
-        key = _resolve_api_key()
+        key = ga.resolve_api_key()
         if not key:
             messagebox.showwarning(
                 "Missing API Key",
@@ -2079,7 +2044,7 @@ class RPGGame:
             )
             return False
         try:
-            _ensure_client()
+            client = ga.ensure_client()
             if client is None:
                 raise RuntimeError("No API client available")
             client.models.list(config={'page_size': 1})
