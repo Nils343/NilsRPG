@@ -587,7 +587,6 @@ class RPGGame:
         # drop any extra invocations while one is already in progress
         if self._is_submitting:
             return
-        self._is_submitting = True
 
         idx = self.selected_option.get()
         if 1 <= idx <= len(self.options):
@@ -596,6 +595,9 @@ class RPGGame:
             choice = self.custom_entry.get("1.0", tk.END).strip()
         if not choice:
             return
+
+        # only mark as submitting once we know there's something to submit
+        self._is_submitting = True
 
         self.past_situations.append(self.current_situation)
         self.past_options.append(choice)
