@@ -5,7 +5,6 @@ services to generate narrative text, images and speech for a dynamic
 role‑playing experience.
 """
 
-import glob
 import json
 import os
 import os.path
@@ -219,12 +218,12 @@ class RPGGame:
         self._tts_warmed = False
         self._debug_logged_once = False
 
-        # Directory for saving every generated image
-        self.image_save_dir = os.path.join(
-            os.getenv("APPDATA", os.path.expanduser("~")),
-            "Nils' RPG",
-            "generated_images"
-        )        
+        # Base directory for storing generated images and savegames
+        # (the folder containing the game itself)
+        self.base_dir = Path(sys.argv[0]).resolve().parent
+
+        # Directory for saving every generated image within the game folder
+        self.image_save_dir = self.base_dir / "generated_images"
 
         # Bind ESC to open the modal menu pane
         root.bind('<Escape>', self._handle_global_escape)
@@ -1363,13 +1362,13 @@ class RPGGame:
             img_bytes = generated.image.image_bytes
 
             # Save raw image bytes to disk
-            os.makedirs(self.image_save_dir, exist_ok=True)
+            self.image_save_dir.mkdir(parents=True, exist_ok=True)
             image_filename = (
                 f"{self.character_id}_"
                 f"day{self.day}_turn{self.turn}_"
                 f"{int(time.time())}.png"
             )
-            image_path = os.path.join(self.image_save_dir, image_filename)
+            image_path = self.image_save_dir / image_filename
             with open(image_path, "wb") as f:
                 f.write(img_bytes)
 
@@ -1699,12 +1698,9 @@ class RPGGame:
             return
 
         # Determine save directory and path
-        save_dir = os.path.join(
-            os.getenv("APPDATA", os.path.expanduser("~")),
-            "Nils' RPG",
-        )
-        os.makedirs(save_dir, exist_ok=True)
-        path = os.path.join(save_dir, f"{self.character_id}.json")
+        save_dir = self.base_dir / "savegames"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        path = save_dir / f"{self.character_id}.json"
 
         # Capture pane geometry
         pane_sizes = None
@@ -1773,12 +1769,9 @@ class RPGGame:
         # pause any pending image generation
         self._image_generation_cancel.set()
 
-        save_dir = os.path.join(
-            os.getenv("APPDATA", os.path.expanduser("~")),
-            "Nils' RPG"
-        )
-        os.makedirs(save_dir, exist_ok=True)
-        files = glob.glob(os.path.join(save_dir, "*.json"))
+        save_dir = self.base_dir / "savegames"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        files = list(save_dir.glob("*.json"))
         if not files:
             messagebox.showinfo("Load Game", "No save files found.")
             return
