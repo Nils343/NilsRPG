@@ -70,3 +70,12 @@ def test_get_response_tokens_handles_legacy_and_new_fields():
     # When no relevant field exists, result should be zero
     assert get_response_tokens(UsageMetadata()) == 0
 
+
+def test_get_response_tokens_returns_zero_when_explicitly_zero():
+    """Ensure zero response_token_count is respected without fallback."""
+
+    both = type(
+        "Usage", (), {"response_token_count": 0, "candidates_token_count": 9}
+    )()
+    assert get_response_tokens(both) == 0
+
