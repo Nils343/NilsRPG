@@ -1073,13 +1073,7 @@ class RPGGame:
                 return
             t_audio_first_chunk = None
             t_audio_play_start = None
-            # ``AsyncClient`` exposes streaming generation under ``models``
-            # rather than ``responses``.  Older code attempted to call
-            # ``client.aio.responses.stream_generate_content`` which raised
-            # ``AttributeError`` because ``responses`` no longer exists on the
-            # async client.  Use ``models.generate_content_stream`` instead to
-            # obtain an async iterator of audio chunks.
-            stream = client.aio.models.generate_content_stream(
+            stream = client.aio.responses.stream_generate_content(
                 model=AUDIO_MODEL,
                 contents=[
                     types.Content(
