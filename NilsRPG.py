@@ -58,7 +58,7 @@ THINKING_BUDGET = 0  # Default thinking budget for text model
 # These constants declare which Gemini model powers each content stream.
 MODEL = "gemini-2.5-flash"  # Primary text model powering narrative responses.
 #AUDIO_MODEL = "gemini-2.5-pro-preview-tts"
-AUDIO_MODEL = "gemini-2.5-flash-preview-tts"  # Default text-to-speech model for narration.
+AUDIO_MODEL = "gemini-2.5-flash-preview-native-audio-dialog"  # Native audio dialog model for narration.
 AUDIO_VOICE = "Algenib"  # Default voice used for narration.
 #IMAGE_MODEL = "imagen-4.0-generate-001"  # Baseline image generation model.
 #IMAGE_MODEL = "imagen-4.0-ultra-generate-001"  # High quality image model.
@@ -1056,7 +1056,7 @@ class RPGGame:
         self._debug_logged_once = False
 
     def _speak_situation(self, text: str):
-        """Generate and play a fantasy-style narration of ``text`` using Gemini TTS."""
+        """Generate and play a fantasy-style narration of `text` using Gemini Live."""
         if not SOUND_ENABLED or not HAVE_SD:
             return
         self._stop_audio()
@@ -1073,14 +1073,9 @@ class RPGGame:
                 return
             t_audio_first_chunk = None
             t_audio_play_start = None
-            stream = client.aio.responses.stream_generate_content(
+            async with client.aio.live.connect(
                 model=AUDIO_MODEL,
-                contents=[
-                    types.Content(
-                        role="user", parts=[types.Part(text=narration)]
-                    )
-                ],
-                config=types.GenerateContentConfig(
+                config=types.LiveConnectConfig(
                     response_modalities=["AUDIO"],
                     speech_config=types.SpeechConfig(
                         voice_config=types.VoiceConfig(
@@ -1090,54 +1085,59 @@ class RPGGame:
                         )
                     ),
                 ),
-            )
-
-            with self._audio_stream_lock:
-                sd_stream = sd.OutputStream(
-                    samplerate=24000,
-                    channels=1,
-                    dtype="int16",
-                    latency="high",
-                    blocksize=2048,
+            ) as session:
+                await session.send_client_content(
+                    turns=types.Content(
+                        role="user",
+                        parts=[types.Part(text=narration)],
+                    )
                 )
-                sd_stream.start()
-                self._audio_stream = sd_stream
-
-            last_usage = None
-            loop = asyncio.get_running_loop()
-            async for chunk in stream:
-                if getattr(chunk, "usage_metadata", None):
-                    # The SDK reports cumulative token counts for the stream
-                    # in `usage_metadata` on each chunk. Record the last
-                    # seen values and apply them after the stream finishes so
-                    # tokens are only counted once.
-                    last_usage = chunk.usage_metadata
-                for part in getattr(getattr(chunk, "content", chunk), "parts", []):
-                    data = getattr(part, "data", None)
+                with self._audio_stream_lock:
+                    sd_stream = sd.OutputStream(
+                        samplerate=24000,
+                        channels=1,
+                        dtype="int16",
+                        latency="high",
+                        blocksize=2048,
+                    )
+                    sd_stream.start()
+                    self._audio_stream = sd_stream
+                last_usage = None
+                loop = asyncio.get_running_loop()
+                async for msg in session.receive():
+                    if msg.usage_metadata:
+                        # The SDK reports cumulative token counts for the stream
+                        # in `usage_metadata` on each message.  Record the last
+                        # seen values and apply them after the stream finishes so
+                        # tokens are only counted once.
+                        last_usage = msg.usage_metadata
+                    data = msg.data
                     if data:
                         if t_audio_first_chunk is None:
                             t_audio_first_chunk = time.time()
                             t_audio_play_start = time.time()
-                        # Writing to the sound device is a blocking call; run it
-                        # in a worker thread so the event loop remains responsive
-                        # during long narrations.
+                        # Writing to the sound device is a blocking call. If this
+                        # runs on the event loop thread, the websockets keepalive
+                        # pings cannot be processed which eventually triggers a
+                        # timeout ("keepalive ping timeout; no close frame"). Run
+                        # the blocking write in a worker thread so the event loop
+                        # stays responsive during long narrations.
                         arr = np.frombuffer(data, dtype=np.int16)
+                        # Offload the blocking write via the default threadpool so
+                        # asyncio can continue replying to websocket pings.
                         await loop.run_in_executor(None, sd_stream.write, arr)
-
-            with self._audio_stream_lock:
-                sd_stream.stop()
-                sd_stream.close()
-                self._audio_stream = None
-
-            if last_usage:
-                self.total_audio_prompt_tokens += (
-                    last_usage.prompt_token_count or 0
-                )
-                # The SDK has used different attribute names for response
-                # tokens over time.  Rely on the helper to read whichever
-                # is present.
-                self.total_audio_output_tokens += get_response_tokens(last_usage)
-
+                with self._audio_stream_lock:
+                    sd_stream.stop()
+                    sd_stream.close()
+                    self._audio_stream = None
+                if last_usage:
+                    self.total_audio_prompt_tokens += (
+                        last_usage.prompt_token_count or 0
+                    )
+                    # The SDK has used different attribute names for response
+                    # tokens over time.  Rely on the helper to read whichever
+                    # is present.
+                    self.total_audio_output_tokens += get_response_tokens(last_usage)
             return t_audio_first_chunk, t_audio_play_start
 
         try:
