@@ -6,6 +6,7 @@ import os
 import tempfile
 import importlib.resources as pkg_resources
 import sys
+import atexit
 
 if sys.platform.startswith("win"):
     import ctypes
@@ -13,6 +14,28 @@ if sys.platform.startswith("win"):
 else:  # pragma: no cover - platform specific
     ctypes = None
     winreg = None
+
+
+_FONT_TEMP_FILES: list[str] = []
+
+
+def _cleanup_fonts() -> None:
+    """Remove registered fonts and delete temporary files."""
+    if not _FONT_TEMP_FILES or ctypes is None or not sys.platform.startswith("win"):
+        return
+    fr_private = 0x10
+    for path in _FONT_TEMP_FILES:
+        try:
+            ctypes.windll.gdi32.RemoveFontResourceExW(path, fr_private, 0)
+        except Exception:  # pragma: no cover - best effort cleanup
+            pass
+        try:
+            os.remove(path)
+        except OSError:  # pragma: no cover - best effort cleanup
+            pass
+
+
+atexit.register(_cleanup_fonts)
 
 
 def set_user_env_var(name: str, value: str) -> None:
@@ -118,9 +141,10 @@ def load_embedded_fonts() -> None:
         for font_name in pkg_resources.contents(pkg):
             if font_name.lower().endswith((".ttf", ".otf")):
                 data = pkg_resources.read_binary(pkg, font_name)
-                tmpdir = tempfile.gettempdir()
-                path = os.path.join(tmpdir, font_name)
-                with open(path, "wb") as f:
+                suffix = os.path.splitext(font_name)[1]
+                fd, path = tempfile.mkstemp(suffix=suffix)
+                with os.fdopen(fd, "wb") as f:
                     f.write(data)
                 ctypes.windll.gdi32.AddFontResourceExW(path, fr_private, 0)
+                _FONT_TEMP_FILES.append(path)
 
