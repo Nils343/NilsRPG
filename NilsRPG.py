@@ -1872,7 +1872,8 @@ class RPGGame:
                 img = Image.open(BytesIO(base64.b64decode(data.scene_image_b64)))
                 self._orig_scene_img = img
             except Exception:
-                self._orig_scene_img = Image.open("default.png")
+                fallback_bytes = pkg_resources.read_binary("assets", "default.png")
+                self._orig_scene_img = Image.open(BytesIO(fallback_bytes))
             evt = type("E", (), {
                 "width": self.scene_frame.winfo_width(),
                 "height": self.scene_frame.winfo_height(),

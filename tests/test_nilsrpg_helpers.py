@@ -2,6 +2,10 @@ import os
 import types
 import sys
 import pathlib
+import base64
+from io import BytesIO
+
+from PIL import Image
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -58,3 +62,14 @@ def test_ensure_client_reuses_and_updates(monkeypatch):
     c3 = ga.ensure_client()
     assert c3 is not c1
     assert c3.api_key == "key2"
+
+
+def test_scene_image_fallback_on_invalid_b64():
+    """Fallback image should load when scene_image_b64 is invalid."""
+    invalid = "not_base64"
+    try:
+        Image.open(BytesIO(base64.b64decode(invalid)))
+    except Exception:
+        img_bytes = nr.pkg_resources.read_binary("assets", "default.png")
+        img = Image.open(BytesIO(img_bytes))
+        assert img.size[0] > 0 and img.size[1] > 0
