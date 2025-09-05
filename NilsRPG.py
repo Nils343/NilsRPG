@@ -1299,56 +1299,65 @@ class RPGGame:
             client = ga.ensure_client()
             if client is None:
                 return
-            response = client.models.generate_images(
-                model=IMAGE_MODEL,
-                prompt=prompt_text,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    include_rai_reason=True,
-                    aspect_ratio="16:9",
-                    person_generation="ALLOW_ADULT"
+            try:
+                response = client.models.generate_images(
+                    model=IMAGE_MODEL,
+                    prompt=prompt_text,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=1,
+                        include_rai_reason=True,
+                        aspect_ratio="16:9",
+                        person_generation="ALLOW_ADULT"
+                    ),
                 )
-            )
-            self.last_image_duration = time.time() - start
+                self.last_image_duration = time.time() - start
 
-            images = getattr(response, 'generated_images', None)
-            if not images:
-                # display went_missing.png when image is blocked or empty
+                images = getattr(response, 'generated_images', None)
+                if not images:
+                    # display went_missing.png when image is blocked or empty
+                    data = pkg_resources.read_binary("assets", "went_missing.png")
+                    placeholder = Image.open(BytesIO(data))
+                    self.root.after(0, lambda image=placeholder: self._finish_image_generation(image))
+                    return
+
+                # Only count successful, unfiltered generations
+                self.total_images += 1
+
+                generated = images[0]
+                # check for safety-filter block or missing bytes
+                rai_reason = getattr(generated, 'rai_filtered_reason', None)
+                if not generated.image.image_bytes or rai_reason:
+                    # display safety_reasons.png on filter or missing bytes
+                    data = pkg_resources.read_binary("assets", "safety_reasons.png")
+                    placeholder = Image.open(BytesIO(data))
+                    self.root.after(0, lambda image=placeholder: self._finish_image_generation(image))
+                    return
+
+                # normal case: load and display
+                img_bytes = generated.image.image_bytes
+
+                # Save raw image bytes to disk
+                self.image_save_dir.mkdir(parents=True, exist_ok=True)
+                image_filename = (
+                    f"{self.character_id}_"
+                    f"day{self.day}_turn{self.turn}_"
+                    f"{int(time.time())}.png"
+                )
+                image_path = self.image_save_dir / image_filename
+                with open(image_path, "wb") as f:
+                    f.write(img_bytes)
+
+                # Now load into PIL for display
+                img = Image.open(BytesIO(img_bytes))
+                self.root.after(0, lambda image=img: self._finish_image_generation(image))
+            except errors.GenAIError as e:
+                self.last_image_duration = time.time() - start
                 data = pkg_resources.read_binary("assets", "went_missing.png")
                 placeholder = Image.open(BytesIO(data))
+                msg = str(e)
                 self.root.after(0, lambda image=placeholder: self._finish_image_generation(image))
-                return
+                self.root.after(0, messagebox.showerror, "Image Generation Error", msg)
 
-            # Only count successful, unfiltered generations
-            self.total_images += 1            
-
-            generated = images[0]
-            # check for safety‐filter block or missing bytes
-            rai_reason = getattr(generated, 'rai_filtered_reason', None)
-            if not generated.image.image_bytes or rai_reason:
-                # display safety_reasons.png on filter or missing bytes
-                data = pkg_resources.read_binary("assets", "safety_reasons.png")
-                placeholder = Image.open(BytesIO(data))
-                self.root.after(0, lambda image=placeholder: self._finish_image_generation(image))
-                return
-
-            # normal case: load and display
-            img_bytes = generated.image.image_bytes
-
-            # Save raw image bytes to disk
-            self.image_save_dir.mkdir(parents=True, exist_ok=True)
-            image_filename = (
-                f"{self.character_id}_"
-                f"day{self.day}_turn{self.turn}_"
-                f"{int(time.time())}.png"
-            )
-            image_path = self.image_save_dir / image_filename
-            with open(image_path, "wb") as f:
-                f.write(img_bytes)
-
-            # Now load into PIL for display
-            img = Image.open(BytesIO(img_bytes))
-            self.root.after(0, lambda image=img: self._finish_image_generation(image))
 
         threading.Thread(target=thread_target, daemon=True).start()
 
