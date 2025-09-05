@@ -1276,6 +1276,7 @@ class RPGGame:
 
     def _start_image_generation(self, prompt_text: str):
         """Kick off asynchronous image generation for the current scene."""
+        self._image_generation_cancel.clear()
         # show image generation progress in thinking pane
         steps = max(1, int(self.last_image_duration * 100))
         self.progress_label.config(text="Generating image…")
@@ -2087,8 +2088,6 @@ class RPGGame:
         self._image_generation_cancel.set()
         prompt = getattr(self, 'previous_image_prompt', None)
         if prompt:
-            # Clear the cancel flag and start a new generation
-            self._image_generation_cancel.clear()
             self._start_image_generation(prompt)
         else:
             # No prompt yet: load the default placeholder image
