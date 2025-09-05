@@ -56,9 +56,11 @@ def get_user_env_var(name: str) -> str | None:
         return os.environ.get(name)
     try:
         reg_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment")
-        value, _ = winreg.QueryValueEx(reg_key, name)
-        winreg.CloseKey(reg_key)
-        return value
+        try:
+            value, _ = winreg.QueryValueEx(reg_key, name)
+            return value
+        finally:
+            winreg.CloseKey(reg_key)
     except FileNotFoundError:
         return os.environ.get(name)
 
