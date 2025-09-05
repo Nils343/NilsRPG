@@ -33,6 +33,8 @@ try:
 except Exception:  # pragma: no cover - missing sounddevice
     HAVE_SD = False
 
+from billing import compute_text_costs, compute_audio_costs, compute_image_costs
+
 from models import (
     Attributes,
     Environment,
@@ -1509,95 +1511,37 @@ class RPGGame:
     def _show_costs_tokens(self):
         """Display a summary of token usage, image count, and costs in a spreadsheet-like view."""
         win = tk.Toplevel(self.root)
-
-        # — Allow ESC to close this window —
         win.bind("<Escape>", lambda e: win.destroy())
-        
         win.title("Cost & Tokens")
-        win.transient(self.root)
-        win.grab_set()
-        # bring window to front
-        win.focus_force()
+        win.transient(self.root); win.grab_set(); win.focus_force()
 
-        # Compute costs based on external pricing data
-        text_rates = MODEL_COSTS.get(MODEL, {})
-        audio_rates = MODEL_COSTS.get(AUDIO_MODEL, {})
-        image_rates = MODEL_COSTS.get(IMAGE_MODEL, {})
+        text_rates = MODEL_COSTS.get(MODEL, {}); audio_rates = MODEL_COSTS.get(AUDIO_MODEL, {}); image_rates = MODEL_COSTS.get(IMAGE_MODEL, {})
+        _, _, cost_text_tokens = compute_text_costs(self.total_prompt_tokens, self.total_completion_tokens, text_rates)
+        _, _, cost_audio_tokens = compute_audio_costs(self.total_audio_prompt_tokens, self.total_audio_output_tokens, audio_rates)
+        cost_images = compute_image_costs(self.total_images, image_rates); cost_total = cost_text_tokens + cost_audio_tokens + cost_images
 
-        cost_text_prompt = (
-            self.total_prompt_tokens
-            * text_rates.get("text_input_cost_per_token", 0)
-        )
-        cost_text_completion = (
-            self.total_completion_tokens
-            * text_rates.get("text_output_cost_per_token", 0)
-        )
-        cost_audio_prompt = (
-            self.total_audio_prompt_tokens
-            * audio_rates.get("text_input_cost_per_token", 0)
-        )
-        cost_audio_output = (
-            self.total_audio_output_tokens
-            * audio_rates.get("audio_output_cost_per_token", 0)
-        )
-        cost_images = (
-            self.total_images * image_rates.get("output_cost_per_image", 0)
-        )
-
-        cost_text_tokens = cost_text_prompt + cost_text_completion
-        cost_audio_tokens = cost_audio_prompt + cost_audio_output
-        cost_prompt = cost_text_prompt + cost_audio_prompt
-        cost_completion = cost_text_completion + cost_audio_output
-        cost_total = cost_text_tokens + cost_audio_tokens + cost_images
-
-        # Prepare rows: (Metric, Value)
         rows = [
-            ("Last-turn prompt tokens",         f"{self.last_prompt_tokens}"),
-            ("Last-turn completion tokens",     f"{self.last_completion_tokens}"),
-            ("Total prompt tokens",             f"{self.total_prompt_tokens}"),
-            ("Total completion tokens",         f"{self.total_completion_tokens}"),
-            ("Total narration prompt tokens",   f"{self.total_audio_prompt_tokens}"),
-            ("Total narration output tokens",   f"{self.total_audio_output_tokens}"),
-            ("Total images generated",          f"{self.total_images}"),
-            ("Total text token cost",           f"${cost_text_tokens:,.4f}"),
-            ("Total narration token cost",      f"${cost_audio_tokens:,.4f}"),
-            ("Total image generation cost",     f"${cost_images:,.2f}"),
-            ("Average cost per turn",           f"${cost_total/max(1,self.turn):,.4f}"),
-            ("Grand total cost",                f"${cost_total:,.4f}"),
+            ("Last-turn prompt tokens", f"{self.last_prompt_tokens}"),
+            ("Last-turn completion tokens", f"{self.last_completion_tokens}"),
+            ("Total prompt tokens", f"{self.total_prompt_tokens}"),
+            ("Total completion tokens", f"{self.total_completion_tokens}"),
+            ("Total narration prompt tokens", f"{self.total_audio_prompt_tokens}"),
+            ("Total narration output tokens", f"{self.total_audio_output_tokens}"),
+            ("Total images generated", f"{self.total_images}"),
+            ("Total text token cost", f"${cost_text_tokens:,.4f}"),
+            ("Total narration token cost", f"${cost_audio_tokens:,.4f}"),
+            ("Total image generation cost", f"${cost_images:,.2f}"),
+            ("Average cost per turn", f"${cost_total/max(1,self.turn):,.4f}"),
+            ("Grand total cost", f"${cost_total:,.4f}"),
         ]
-
-        # Frame to hold the Treeview
-        container = ttk.Frame(win)
-        container.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
-
-        # Create a Treeview with two columns
-        columns = ("Metric", "Value")
-        tree = ttk.Treeview(container, columns=columns, show="headings", height=len(rows))
-        tree.heading("Metric", text="Metric")
-        tree.heading("Value", text="Value")
-        tree.column("Metric", anchor="w", width=500)
-        tree.column("Value", anchor="e", width=100)
-
-        # Insert the data
+        tree = ttk.Treeview(win, columns=("Metric", "Value"), show="headings", height=len(rows))
+        for col in ("Metric", "Value"):
+            tree.heading(col, text=col); tree.column(col, anchor=("w" if col == "Metric" else "e"), width=(500 if col == "Metric" else 100))
         for metric, value in rows:
             tree.insert("", tk.END, values=(metric, value))
-        tree.pack(fill=tk.BOTH, expand=True)
-
-        # Close button
-        btn_close = ttk.Button(win, text="Close", command=win.destroy)
-        btn_close.pack(pady=(0,12))
-
-        # Resize window to fit content and center on screen
-        win.update_idletasks()
-        w = win.winfo_reqwidth()
-        h = win.winfo_reqheight()
-        win.minsize(w+50, h)
-
-        screen_w = win.winfo_screenwidth()
-        screen_h = win.winfo_screenheight()
-        x = (screen_w - w) // 2
-        y = (screen_h - h) // 2
-        win.geometry(f"{w}x{h}+{x}+{y}")
+        tree.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        ttk.Button(win, text="Close", command=win.destroy).pack(pady=(0, 12))
+        win.update_idletasks(); w, h = win.winfo_reqwidth(), win.winfo_reqheight(); win.minsize(w + 50, h); sw, sh = win.winfo_screenwidth(), win.winfo_screenheight(); win.geometry(f"{w}x{h}+{(sw - w)//2}+{(sh - h)//2}")
 
     def _reset_game(self):
         """Completely wipe game state, UI, tokens, images, and restore placeholder."""
