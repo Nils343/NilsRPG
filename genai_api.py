@@ -8,10 +8,13 @@ development.
 from __future__ import annotations
 
 import os
+import logging
 from google import genai
 from google.genai import types, errors
 
 from utils import get_user_env_var
+
+logger = logging.getLogger(__name__)
 
 # Cached client instance and the key used to create it
 client: genai.Client | None = None
@@ -47,8 +50,14 @@ def ensure_client() -> genai.Client | None:
         _client_key = None
         return None
     if client is None or key != _client_key:
-        client = genai.Client(api_key=key)
-        _client_key = key
+        try:
+            client = genai.Client(api_key=key)
+            _client_key = key
+        except (getattr(errors, "GenAIError", Exception), Exception) as exc:
+            logger.error("Failed to create GenAI client: %s", exc)
+            client = None
+            _client_key = None
+            return None
     return client
 
 def set_client_for_key(new_client: genai.Client, key: str) -> None:

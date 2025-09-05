@@ -64,6 +64,31 @@ def test_ensure_client_reuses_and_updates(monkeypatch):
     assert c3.api_key == "key2"
 
 
+def test_ensure_client_handles_error(monkeypatch, caplog):
+    """ensure_client returns None and resets state when client creation fails."""
+
+    class DummyError(Exception):
+        pass
+
+    def raising_client(api_key):
+        raise DummyError("boom")
+
+    monkeypatch.setattr(ga, "genai", types.SimpleNamespace(Client=raising_client))
+    monkeypatch.setattr(ga.errors, "GenAIError", DummyError, raising=False)
+    monkeypatch.setattr(ga, "get_user_env_var", lambda name: None)
+
+    ga.client = None
+    ga._client_key = None
+    monkeypatch.setenv("GEMINI_API_KEY", "bad")
+
+    with caplog.at_level("ERROR"):
+        assert ga.ensure_client() is None
+
+    assert ga.client is None
+    assert ga._client_key is None
+    assert "Failed to create GenAI client" in caplog.text
+
+
 def test_scene_image_fallback_on_invalid_b64():
     """Fallback image should load when scene_image_b64 is invalid."""
     invalid = "not_base64"
