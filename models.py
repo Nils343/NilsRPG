@@ -1,6 +1,6 @@
 """Data models used by the NilsRPG application."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class IdentitiesResponse(BaseModel):
@@ -69,8 +69,8 @@ class PaneSizes(BaseModel):
     """Persisted geometry for the main, left and right panes."""
 
     main_sash: int
-    left_sashes: list[int] = []
-    right_sashes: list[int] = []
+    left_sashes: list[int] = Field(default_factory=list)
+    right_sashes: list[int] = Field(default_factory=list)
 
 
 class SaveGame(BaseModel):
