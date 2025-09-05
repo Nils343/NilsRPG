@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 import asyncio
+import queue
 import tkinter as tk
 from pathlib import Path
 from io import BytesIO
@@ -24,8 +25,6 @@ from PIL import Image, ImageTk
 import genai_api as ga
 from genai_api import types, errors
 from ttkbootstrap import Style
-
-import numpy as np
 try:
     import sounddevice as sd
     HAVE_SD = True
@@ -176,7 +175,9 @@ class RPGGame:
         self._loading = False
 
         # Audio streaming state
-        self._audio_stream = None
+        self._audio_queue = None
+        self._audio_stop_event = None
+        self._audio_thread = None
         self._audio_stream_lock = threading.Lock()
 
         # Narration tracking
@@ -1039,15 +1040,23 @@ class RPGGame:
 
     # --- Read the just-streamed situation out loud (Gemini TTS) ---
     def _stop_audio(self):
-        """Stop any currently playing audio stream."""
+        """Stop any currently playing audio."""
         with self._audio_stream_lock:
-            if self._audio_stream is not None:
+            if self._audio_queue is not None:
                 try:
-                    self._audio_stream.stop()
-                    self._audio_stream.close()
+                    self._audio_queue.put_nowait(None)
                 except Exception:
                     pass
-                self._audio_stream = None
+                self._audio_queue = None
+            if self._audio_stop_event is not None:
+                self._audio_stop_event.set()
+                self._audio_stop_event = None
+            if self._audio_thread is not None:
+                try:
+                    self._audio_thread.join(timeout=1)
+                except Exception:
+                    pass
+                self._audio_thread = None
 
     def _clear_narration(self):
         """Stop audio and reset narration debug state."""
@@ -1072,7 +1081,7 @@ class RPGGame:
             if client is None:
                 return
             t_audio_first_chunk = None
-            t_audio_play_start = None
+            t_audio_play_start_holder = [None]
             async with client.aio.live.connect(
                 model=AUDIO_MODEL,
                 config=types.LiveConnectConfig(
@@ -1092,44 +1101,66 @@ class RPGGame:
                         parts=[types.Part(text=narration)],
                     )
                 )
-                with self._audio_stream_lock:
-                    sd_stream = sd.OutputStream(
+                audio_q = queue.Queue(maxsize=64)
+                stop_evt = threading.Event()
+
+                def playback_worker():
+                    with sd.RawOutputStream(
                         samplerate=24000,
                         channels=1,
                         dtype="int16",
                         latency="high",
-                        blocksize=512,
-                    )
-                    sd_stream.start()
-                    self._audio_stream = sd_stream
-                last_usage = None
-                loop = asyncio.get_running_loop()
-                async for msg in session.receive():
-                    if msg.usage_metadata:
-                        # The SDK reports cumulative token counts for the stream
-                        # in `usage_metadata` on each message.  Record the last
-                        # seen values and apply them after the stream finishes so
-                        # tokens are only counted once.
-                        last_usage = msg.usage_metadata
-                    data = msg.data
-                    if data:
-                        if t_audio_first_chunk is None:
-                            t_audio_first_chunk = time.time()
-                            t_audio_play_start = time.time()
-                        # Writing to the sound device is a blocking call. If this
-                        # runs on the event loop thread, the websockets keepalive
-                        # pings cannot be processed which eventually triggers a
-                        # timeout ("keepalive ping timeout; no close frame"). Run
-                        # the blocking write in a worker thread so the event loop
-                        # stays responsive during long narrations.
-                        arr = np.frombuffer(data, dtype=np.int16)
-                        # Offload the blocking write via the default threadpool so
-                        # asyncio can continue replying to websocket pings.
-                        await loop.run_in_executor(None, sd_stream.write, arr)
+                        blocksize=1024,
+                    ) as s:
+                        while not stop_evt.is_set():
+                            chunk = audio_q.get()
+                            if chunk is None:
+                                break
+                            if t_audio_play_start_holder[0] is None:
+                                t_audio_play_start_holder[0] = time.time()
+                            s.write(chunk)
+
+                player = threading.Thread(target=playback_worker, daemon=True)
+                player.start()
                 with self._audio_stream_lock:
-                    sd_stream.stop()
-                    sd_stream.close()
-                    self._audio_stream = None
+                    self._audio_queue = audio_q
+                    self._audio_stop_event = stop_evt
+                    self._audio_thread = player
+
+                last_usage = None
+                diag_fh = open(self.base_dir / "debug_audio.raw", "ab") if DEBUG_TTS else None
+                try:
+                    async for msg in session.receive():
+                        if msg.usage_metadata:
+                            # The SDK reports cumulative token counts for the stream
+                            # in `usage_metadata` on each message.  Record the last
+                            # seen values and apply them after the stream finishes so
+                            # tokens are only counted once.
+                            last_usage = msg.usage_metadata
+                        data = msg.data
+                        if data:
+                            if t_audio_first_chunk is None:
+                                t_audio_first_chunk = time.time()
+                            chunk_bytes = bytes(data)
+                            try:
+                                audio_q.put_nowait(chunk_bytes)
+                            except queue.Full:
+                                pass
+                            if diag_fh:
+                                diag_fh.write(chunk_bytes)
+                finally:
+                    if diag_fh:
+                        diag_fh.close()
+                    try:
+                        audio_q.put_nowait(None)
+                    except Exception:
+                        pass
+                    stop_evt.set()
+                    player.join()
+                    with self._audio_stream_lock:
+                        self._audio_queue = None
+                        self._audio_stop_event = None
+                        self._audio_thread = None
                 if last_usage:
                     self.total_audio_prompt_tokens += (
                         last_usage.prompt_token_count or 0
@@ -1138,7 +1169,7 @@ class RPGGame:
                     # tokens over time.  Rely on the helper to read whichever
                     # is present.
                     self.total_audio_output_tokens += get_response_tokens(last_usage)
-            return t_audio_first_chunk, t_audio_play_start
+            return t_audio_first_chunk, t_audio_play_start_holder[0]
 
         try:
             t_audio_first_chunk, t_audio_play_start = asyncio.run(_run())
