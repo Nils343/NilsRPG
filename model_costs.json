@@ -1,7 +1,7 @@
 {
   "gemini-2.5-flash": {
     "text_input_cost_per_token": 1.5e-7,
-    "audio_output_cost_per_token": 1.25e-6,
+    "text_output_cost_per_token": 1.25e-6,
     "source": "https://ai.google.dev/gemini-api/docs/pricing"
   },
   "gemini-2.5-flash-preview-native-audio-dialog": {

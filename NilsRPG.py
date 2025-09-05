@@ -1530,7 +1530,7 @@ class RPGGame:
         )
         cost_text_completion = (
             self.total_completion_tokens
-            * text_rates.get("audio_output_cost_per_token", 0)
+            * text_rates.get("text_output_cost_per_token", 0)
         )
         cost_audio_prompt = (
             self.total_audio_prompt_tokens
