@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 import asyncio
+import queue
 import tkinter as tk
 from pathlib import Path
 from io import BytesIO
@@ -1125,18 +1126,47 @@ class RPGGame:
                         parts=[types.Part(text=narration)],
                     )
                 )
+
+                q: queue.Queue[bytes | None] = queue.Queue()
+                buffer = bytearray()
+                finished = False
+
+                def callback(outdata, frames, time_info, status):
+                    nonlocal t_audio_play_start, buffer, finished
+                    if status:
+                        print(f"Audio callback status: {status}", file=sys.stderr)
+                    while len(buffer) < len(outdata) and not finished:
+                        try:
+                            chunk = q.get_nowait()
+                        except queue.Empty:
+                            break
+                        if chunk is None:
+                            finished = True
+                        else:
+                            if t_audio_play_start is None:
+                                t_audio_play_start = time.time()
+                            buffer.extend(chunk)
+                    out = buffer[: len(outdata)]
+                    outdata[: len(out)] = out
+                    if len(out) < len(outdata):
+                        outdata[len(out) :] = b"\x00" * (len(outdata) - len(out))
+                    del buffer[: len(outdata)]
+                    if finished and not buffer:
+                        raise sd.CallbackStop()
+
                 with self._audio_stream_lock:
-                    sd_stream = sd.OutputStream(
+                    sd_stream = sd.RawOutputStream(
                         samplerate=24000,
                         channels=1,
                         dtype="int16",
                         latency="high",
                         blocksize=2048,
+                        callback=callback,
                     )
                     sd_stream.start()
                     self._audio_stream = sd_stream
+
                 last_usage = None
-                loop = asyncio.get_running_loop()
                 async for msg in session.receive():
                     if msg.usage_metadata:
                         # The SDK reports cumulative token counts for the stream
@@ -1148,21 +1178,17 @@ class RPGGame:
                     if data:
                         if t_audio_first_chunk is None:
                             t_audio_first_chunk = time.time()
-                            t_audio_play_start = time.time()
-                        # Writing to the sound device is a blocking call. If this
-                        # runs on the event loop thread, the websockets keepalive
-                        # pings cannot be processed which eventually triggers a
-                        # timeout ("keepalive ping timeout; no close frame"). Run
-                        # the blocking write in a worker thread so the event loop
-                        # stays responsive during long narrations.
-                        arr = np.frombuffer(data, dtype=np.int16)
-                        # Offload the blocking write via the default threadpool so
-                        # asyncio can continue replying to websocket pings.
-                        await loop.run_in_executor(None, sd_stream.write, arr)
+                        q.put(bytes(data))
+
+                q.put(None)
+                while sd_stream.active:
+                    await asyncio.sleep(0.05)
+
                 with self._audio_stream_lock:
                     sd_stream.stop()
                     sd_stream.close()
                     self._audio_stream = None
+
                 if last_usage:
                     self.total_audio_prompt_tokens += (
                         last_usage.prompt_token_count or 0
@@ -1171,10 +1197,19 @@ class RPGGame:
                     # tokens over time.  Rely on the helper to read whichever
                     # is present.
                     self.total_audio_output_tokens += get_response_tokens(last_usage)
+
             return t_audio_first_chunk, t_audio_play_start
 
         try:
-            t_audio_first_chunk, t_audio_play_start = asyncio.run(_run())
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(_run(), loop)
+                t_audio_first_chunk, t_audio_play_start = fut.result()
+            else:
+                t_audio_first_chunk, t_audio_play_start = asyncio.run(_run())
         except Exception as e:
             # Non-fatal: just log it
             print("TTS error:", e)
