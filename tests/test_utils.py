@@ -1,9 +1,12 @@
 import sys
 import pathlib
+import os
+import types
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 import pytest
 
+import utils
 from utils import (
     clean_unicode,
     set_user_env_var,
@@ -78,4 +81,32 @@ def test_get_response_tokens_returns_zero_when_explicitly_zero():
         "Usage", (), {"response_token_count": 0, "candidates_token_count": 9}
     )()
     assert get_response_tokens(both) == 0
+
+
+def test_load_embedded_fonts_registers_and_cleans(monkeypatch, tmp_path):
+    """Fonts written to temporary files should be cleaned up on exit."""
+
+    utils._FONT_TEMP_FILES.clear()
+    monkeypatch.setattr(utils.sys, "platform", "win32")
+
+    dummy_gdi = types.SimpleNamespace(
+        AddFontResourceExW=lambda *args: 1,
+        RemoveFontResourceExW=lambda *args: 1,
+    )
+    dummy_windll = types.SimpleNamespace(
+        gdi32=dummy_gdi,
+        shcore=types.SimpleNamespace(SetProcessDpiAwareness=lambda *args: None),
+    )
+    monkeypatch.setattr(utils, "ctypes", types.SimpleNamespace(windll=dummy_windll))
+    monkeypatch.setattr(utils.pkg_resources, "contents", lambda pkg: ["fake.ttf"])
+    monkeypatch.setattr(utils.pkg_resources, "read_binary", lambda pkg, name: b"data")
+    monkeypatch.setenv("TMP", str(tmp_path))
+
+    load_embedded_fonts()
+    assert utils._FONT_TEMP_FILES
+    temp_path = utils._FONT_TEMP_FILES[0]
+    assert os.path.exists(temp_path)
+
+    utils._cleanup_fonts()
+    assert not os.path.exists(temp_path)
 
