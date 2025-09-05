@@ -1832,6 +1832,12 @@ class RPGGame:
 
     def _load_game_from_path(self, path):
         """Load game state from the user's chosen save file."""
+        # Ensure any menu or load dialog is closed before restoring state
+        if hasattr(self, "menu_win") and self.menu_win.winfo_exists():
+            self.menu_win.destroy()
+        if hasattr(self, "load_win") and self.load_win.winfo_exists():
+            self.load_win.destroy()
+
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = SaveGame.model_validate_json(f.read())
