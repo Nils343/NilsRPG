@@ -220,7 +220,11 @@ class RPGGame:
 
         # Base directory for storing generated images and savegames
         # (the folder containing the game itself)
-        self.base_dir = Path(sys.argv[0]).resolve().parent
+        if getattr(sys, "frozen", False):  # Support frozen/packaged builds
+            base = Path(sys.executable)
+        else:
+            base = Path(__file__)
+        self.base_dir = base.resolve().parent
 
         # Directory for saving every generated image within the game folder
         self.image_save_dir = self.base_dir / "generated_images"
