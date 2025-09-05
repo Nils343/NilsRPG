@@ -1,18 +1,36 @@
 # Nils' RPG
 
-A Tk/ttkbootstrap desktop RPG that uses Google's Gemini via the `google-genai` SDK.
+A tiny Tk based role playing demo.  The user interface is intentionally slim and
+delegates most work to service modules.
 
-## Quick start (Windows)
+## Quick start
 
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-$env:GEMINI_API_KEY="your_key_here"
-python NilsRPG.py
+```bash
+python NilsRPG.py  # launches the UI
 ```
 
-The application will automatically read your `GEMINI_API_KEY` from the Windows
-user environment, even when running inside a virtual environment. You can also
-configure or update the key from the in‑game **API** menu, which also lets you
-set the text model's thinking budget (0‑4096) for deeper reasoning.
+## Running the tests
+
+```bash
+python -m unittest -q
+python -m compileall .
+```
+
+The project also uses simple grep checks to ensure the UI remains thin:
+
+```bash
+grep -R "pickle" -n NilsRPG.py || true
+grep -R "genai" -n NilsRPG.py || true
+grep -R "Image" -n NilsRPG.py || true
+```
+
+All commands should produce no output.
+
+## Module layout
+
+- `NilsRPG.py` – Tk user interface.
+- `config.py` – application configuration.
+- `services/` – narrative, audio, image and AI helpers.
+- `storage/` – versioned JSON save files.
+- `state.py` – dataclasses for game state.
+- `tests/` – unit tests.
