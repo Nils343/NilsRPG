@@ -1305,8 +1305,8 @@ class RPGGame:
                 config=types.GenerateImagesConfig(
                     number_of_images=1,
                     include_rai_reason=True,
-                    aspectRatio="16:9",
-                    personGeneration="ALLOW_ADULT"
+                    aspect_ratio="16:9",
+                    person_generation="ALLOW_ADULT"
                 )
             )
             self.last_image_duration = time.time() - start
