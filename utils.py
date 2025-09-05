@@ -88,11 +88,17 @@ def get_response_tokens(usage) -> int:
     if usage is None:  # pragma: no cover - defensive
         return 0
 
-    return (
-        getattr(usage, "response_token_count", None)
-        or getattr(usage, "candidates_token_count", 0)
-        or 0
-    )
+    if hasattr(usage, "response_token_count") and getattr(
+        usage, "response_token_count"
+    ) is not None:
+        return getattr(usage, "response_token_count")
+
+    if hasattr(usage, "candidates_token_count") and getattr(
+        usage, "candidates_token_count"
+    ) is not None:
+        return getattr(usage, "candidates_token_count")
+
+    return 0
 
 
 def load_embedded_fonts() -> None:
