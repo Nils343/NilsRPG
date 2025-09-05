@@ -50,7 +50,7 @@ def test_speak_situation_streams_via_models(monkeypatch):
     # Track whether ``generate_content_stream`` was invoked.
     called = {"flag": False}
 
-    def gen_content_stream(**_):
+    async def gen_content_stream(**_):
         called["flag"] = True
         return _dummy_stream()
 
