@@ -151,10 +151,12 @@ class RPGGame:
         """Configure widgets, fonts and initial game state."""
         # unique ID for this character (initialized on first identity choice)
         self.character_id = None
+        # player's self-description captured during identity prompt
+        self.identity: str | None = None
 
         # record chosen world style & difficulty
         self.style_choice = None
-        self.diff_choice  = None        
+        self.diff_choice  = None
 
         # guard flag to prevent double‐submit
         self._is_submitting = False        
