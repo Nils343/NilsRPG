@@ -1158,12 +1158,7 @@ class RPGGame:
                         arr = np.frombuffer(data, dtype=np.int16)
                         # Offload the blocking write via the default threadpool so
                         # asyncio can continue replying to websocket pings.
-                        try:
-                            await loop.run_in_executor(None, sd_stream.write, arr)
-                        except Exception as e:
-                            print("TTS audio write warning:", e)
-                            # Soft-break the loop so we can close the stream cleanly
-                            break
+                        await loop.run_in_executor(None, sd_stream.write, arr)
                 with self._audio_stream_lock:
                     sd_stream.stop()
                     sd_stream.close()
